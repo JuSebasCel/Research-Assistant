@@ -1,0 +1,37 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.vscode
+
+# Environment variables
+.env
+.env.local
+
+# Data and storage
+data/qdrant_storage/
+data/uploads/
+*.pdf
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+error_log.txt
+
+# Model cache (opcional, si no quieres subir modelos descargados)
+# .cache/
