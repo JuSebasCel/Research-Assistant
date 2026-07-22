@@ -28,7 +28,7 @@ src/rag_app/
 
 **LLM:** OpenAI GPT-4o-mini para generación de respuestas. Balance entre costo y calidad.
 
-**Chunking:** Estrategia inteligente usando la estructura del documento extraída por Docling.
+**Chunking:** HybridChunker oficial de Docling. Divide respetando estructura semántica y contextualiza con headings/metadata.
 
 **Gestión de dependencias:** uv por su velocidad y manejo determinista de versiones.
 
@@ -58,39 +58,58 @@ uv run uvicorn rag_app.main:app --reload
 
 El servidor arranca en `http://localhost:8000`. Dashboard de Qdrant disponible en `http://localhost:6333/dashboard`.
 
-## Extracción de PDFs
+## Pipeline de Extracción y Chunking
 
-Usamos **Docling** para extraer información estructurada de los papers científicos. A diferencia de extractores simples que solo sacan texto plano, Docling preserva la estructura completa del documento.
+Usamos **Docling** para extraer y procesar PDFs científicos manteniendo su estructura completa.
 
-### ¿Qué extrae?
-
-- Jerarquía del documento (títulos, secciones, subsecciones)
-- Párrafos con su contexto estructural
-- Tablas en formato Markdown/HTML
-- Figuras con sus captions
-- Referencias entre elementos
-- Coordenadas espaciales (bounding boxes)
-- Metadata de páginas
-
-Todo se guarda en `data/cache/` para no tener que reprocesar el PDF.
-
-### Auditar la extracción
-
-Antes de mandar un documento al RAG, puedes revisar que la extracción salió bien:
+### Script de orquestación
 
 ```bash
-uv run python scripts/inspect_docling.py data/uploads/paper.pdf
+# Procesar un PDF (extracción + chunking)
+uv run python src/rag_app/services/run_chunking.py data/uploads/paper.pdf
+
+# Re-chunkear un documento ya extraído (sin OCR por defecto)
+uv run python src/rag_app/services/run_chunking.py data/uploads/paper.pdf --force
+
+# Activar OCR para PDFs escaneados
+uv run python src/rag_app/services/run_chunking.py data/uploads/paper.pdf --ocr
+
+# Re-chunkear todos los documentos en cache
+uv run python src/rag_app/services/run_chunking.py --all --force
 ```
 
-Esto genera un reporte en `data/audit/` con:
-- El markdown extraído (lo más importante para revisar)
-- Estadísticas del documento
-- Todas las figuras y tablas extraídas
-- Checklist de qué revisar manualmente
+### ¿Qué extrae Docling?
+
+- **document.json**: DoclingDocument completo serializado
+- **markdown.md**: Conversión a markdown para lectura humana
+- **figures/**: Imágenes PNG + metadata JSON de cada figura
+- **tables/**: Tablas en Markdown/HTML + metadata JSON
+- **chunks/chunks.json**: Todos los chunks con embeddings contextualizados
+- **chunks/chunks_audit.md**: Reporte legible para revisar calidad del chunking
+- **chunks/statistics.json**: Estadísticas de distribución de tokens
+
+### Features del chunking
+
+El **HybridChunker** oficial de Docling:
+- Divide respetando estructura semántica (no por tamaño fijo)
+- Usa tokenizer de `multilingual-e5-large` (mismo que embeddings)
+- Contextualiza chunks con headings jerárquicos
+- **Vincula chunks con sus figuras**: cada chunk sabe qué imágenes le pertenecen
+- Corrige running headers mal clasificados por el layout model
+- **OCR desactivado por defecto** para PDFs nativos digitales
+
+### Auditar antes de embeddings
+
+Revisa `data/cache/{documento}/chunks/chunks_audit.md` para ver:
+- Texto exacto que se enviará al modelo de embeddings
+- Headings jerárquicos de cada chunk
+- Imágenes asociadas a cada chunk (para LLMs multimodales)
+- Páginas cubiertas
+- Distribución de tokens
 
 ### ¿Por qué Docling?
 
-Los PDFs científicos son complicados: multi-columna, ecuaciones, tablas complejas, figuras referenciadas. Docling entiende la estructura del documento académico y extrae todo correctamente, no solo el texto.
+Los PDFs científicos son complicados: multi-columna, ecuaciones, tablas complejas, figuras referenciadas. Docling entiende la estructura del documento académico y extrae todo correctamente, preservando relaciones entre texto e imágenes.
 
 ## Desarrollo
 
@@ -100,11 +119,11 @@ Los PDFs científicos son complicados: multi-columna, ecuaciones, tablas complej
 # Verificar que el servidor responde
 curl http://localhost:8000/health
 
-# Probar extracción de PDF
-uv run python scripts/inspect_docling.py data/uploads/paper.pdf
+# Probar pipeline completo de extracción + chunking
+uv run python src/rag_app/services/run_chunking.py data/uploads/paper.pdf
 
-# Probar provider de embeddings
-uv run python scripts/test_embeddings.py
+# Revisar chunks generados
+cat data/cache/paper/chunks/chunks_audit.md
 ```
 
 ### Estado actual
@@ -114,9 +133,12 @@ uv run python scripts/test_embeddings.py
 - ✅ Provider de embeddings funcional
 - ✅ Integración con Qdrant
 - ✅ Extracción estructurada de PDFs con Docling
+- ✅ Chunking inteligente con HybridChunker
+- ✅ Vinculación de chunks con imágenes para RAG multimodal
+- ✅ Corrección de running headers mal clasificados
+- ✅ OCR configurable (desactivado por defecto)
 
 **En desarrollo:**
-- 🔄 Chunking inteligente usando estructura del documento
 - ⏳ Pipeline de ingesta (endpoint para subir papers)
 - ⏳ Búsqueda híbrida (BM25 + vectorial + RRF)
 - ⏳ Integración con LLM

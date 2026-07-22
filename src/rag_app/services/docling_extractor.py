@@ -34,6 +34,7 @@ from docling.datamodel.pipeline_options import (
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.document import DoclingDocument
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling_core.types.doc import DocItemLabel, ContentLayer
 
 logger = logging.getLogger(__name__)
 
@@ -111,11 +112,11 @@ class NodeData:
 class FigureData:
     """Rich figure metadata."""
     figure_id: str
-
     index: int
     caption: Optional[str]
     image_path: Optional[str]
     parent_cref: Optional[str]
+    self_ref: Optional[str] = None
     children_crefs: List[str] = field(default_factory=list)
     provenance: List[ProvenanceData] = field(default_factory=list)
     has_image: bool = False
@@ -212,11 +213,44 @@ class DoclingExtractor:
         self.converter = DocumentConverter(format_options=format_options)
         self.generate_page_images = generate_page_images
         
+        # Guardar flags reales para metadata.json
+        self.enable_ocr = enable_ocr
+        self.enable_table_structure = enable_table_structure
+        self.generate_picture_images = generate_picture_images
+        
         logger.info(
             f"DoclingExtractor initialized: backend=DoclingParse, "
             f"ocr={enable_ocr}, tables={enable_table_structure}, "
             f"pictures={generate_picture_images}, pages={generate_page_images}"
         )
+    
+    def _fix_running_headers(self, doc) -> int:
+        """
+        Detecta section_headers cuyo texto se repite idéntico en 2+ páginas
+        (running header/footer mal clasificado por el layout model) y los
+        reclasifica como page_header + furniture, para que el chunker deje
+        de tratarlos como headings de sección real.
+        """
+        from collections import defaultdict
+
+        text_to_items = defaultdict(list)
+        for item in doc.texts:
+            if item.label == DocItemLabel.SECTION_HEADER:
+                text_to_items[item.text.strip()].append(item)
+
+        fixed = 0
+        for text, items in text_to_items.items():
+            pages = {p.page_no for it in items for p in it.prov}
+            if len(pages) >= 2:
+                for it in items:
+                    it.label = DocItemLabel.PAGE_HEADER
+                    it.content_layer = ContentLayer.FURNITURE
+                fixed += len(items)
+                logger.info(
+                    f"Reclasificado como page_header ({len(items)}x, "
+                    f"{len(pages)} páginas): {text[:60]!r}"
+                )
+        return fixed
     
     def extract(
         self,
@@ -239,6 +273,9 @@ class DoclingExtractor:
         
         result = self.converter.convert(pdf_path)
         doc = result.document
+        
+        n_fixed = self._fix_running_headers(doc)
+        logger.info(f"Headers corregidos: {n_fixed}")
         
         processing_time = (datetime.now() - start_time).total_seconds()
         logger.info(f"Converted in {processing_time:.2f}s")
@@ -269,54 +306,18 @@ class DoclingExtractor:
         doc.save_as_markdown(filename=markdown_path)
         logger.info("✓ markdown.md")
         
-        # 3. Extract ALL nodes (using iterate_items - verified API)
-        nodes = self._extract_all_nodes(doc)
-        nodes_path = cache_dir / "nodes.json"
-        with open(nodes_path, "w", encoding="utf-8") as f:
-            json.dump([asdict(n) for n in nodes], f, indent=2, ensure_ascii=False)
-        logger.info(f"✓ nodes.json ({len(nodes)} nodes)")
-        
-        # 4. Build document tree hierarchy
-        layout = self._build_document_tree(nodes)
-        layout_path = cache_dir / "layout.json"
-        with open(layout_path, "w", encoding="utf-8") as f:
-            json.dump(layout, f, indent=2, ensure_ascii=False)
-        logger.info("✓ layout.json (hierarchical tree)")
-        
-        # 5. Extract figures with resolution
+        # 3. Extract figures with resolution
         figures = self._extract_figures(doc, cache_dir)
         logger.info(f"✓ figures/ ({len(figures)} figures)")
         
-        # 6. Extract tables with all formats
+        # 4. Extract tables with all formats
         tables = self._extract_tables(doc, cache_dir)
         logger.info(f"✓ tables/ ({len(tables)} tables)")
         
-        # 7. Extract page images if enabled
+        # 5. Extract page images if enabled
         if self.generate_page_images:
             self._extract_page_images(doc, cache_dir)
             logger.info(f"✓ pages/ ({len(doc.pages)} pages)")
-        
-        # 8. Generate extraction metadata
-        metadata = ExtractionMetadata(
-            source_file=str(pdf_path),
-            extraction_timestamp=datetime.now().isoformat(),
-            backend="DoclingParse",
-            ocr_enabled=True,
-            table_structure_enabled=True,
-            picture_images_enabled=True,
-            page_images_enabled=self.generate_page_images,
-            num_pages=doc.num_pages() if hasattr(doc, "num_pages") else len(doc.pages),
-            num_tables=len(doc.tables),
-            num_pictures=len(doc.pictures),
-            num_texts=len(doc.texts),
-            num_nodes=len(nodes),
-            file_size_bytes=pdf_path.stat().st_size,
-            processing_time_seconds=processing_time,
-        )
-        metadata_path = cache_dir / "metadata.json"
-        with open(metadata_path, "w", encoding="utf-8") as f:
-            json.dump(asdict(metadata), f, indent=2, ensure_ascii=False)
-        logger.info("✓ metadata.json")
 
     
     def _extract_all_nodes(self, doc: DoclingDocument) -> List[NodeData]:
@@ -520,6 +521,9 @@ class DoclingExtractor:
                     # Try to resolve RefItem
                     caption = self._resolve_text_reference(picture.caption, doc)
             
+            # Extract self_ref (verified API)
+            self_ref = getattr(picture, "self_ref", None)
+            
             # Extract hierarchy (verified API)
             parent_cref = None
             if hasattr(picture, "parent") and picture.parent:
@@ -543,6 +547,7 @@ class DoclingExtractor:
                 index=idx,
                 caption=caption,
                 image_path=image_path,
+                self_ref=self_ref,
                 parent_cref=parent_cref,
                 children_crefs=children_crefs,
                 provenance=provenance,
@@ -706,6 +711,75 @@ class DoclingExtractor:
         """
         doc_json_path = cache_dir / "document.json"
         return DoclingDocument.load_from_json(doc_json_path)
+    
+    def load_document(self, document_name: str) -> Optional[DoclingDocument]:
+        """
+        Load a cached DoclingDocument by name.
+        
+        Convenience method for loading previously extracted documents
+        without needing the original PDF path.
+        
+        Args:
+            document_name: Name of the cached document (without extension)
+        
+        Returns:
+            DoclingDocument if cache exists, None otherwise
+        """
+        doc_cache_dir = self.cache_dir / document_name
+        if not self._is_cached(doc_cache_dir):
+            return None
+        
+        return self._load_from_cache(doc_cache_dir)
+    
+    def get_figures_index(self, document_name: str) -> Dict[str, str]:
+        """
+        Build figures index from cached document.
+        
+        Maps self_ref (e.g., "#/pictures/0") to image path (e.g., "figures/figure_001.png").
+        Used by chunker to link chunks with their associated images.
+        
+        Args:
+            document_name: Name of the cached document
+        
+        Returns:
+            Dictionary mapping self_ref to image_path
+        """
+        doc_cache_dir = self.cache_dir / document_name
+        figures_dir = doc_cache_dir / "figures"
+        
+        if not figures_dir.exists():
+            return {}
+        
+        figures_index = {}
+        
+        # Read all figure JSON files to build the index
+        for figure_json in sorted(figures_dir.glob("figure_*.json")):
+            with open(figure_json, "r", encoding="utf-8") as f:
+                figure_data = json.load(f)
+                self_ref = figure_data.get("self_ref")
+                image_path = figure_data.get("image_path")
+                
+                if self_ref and image_path:
+                    figures_index[self_ref] = image_path
+        
+        return figures_index
+    
+    def list_cached_documents(self) -> List[str]:
+        """
+        List all cached document names.
+        
+        Returns:
+            List of document names (directory names in cache)
+        """
+        if not self.cache_dir.exists():
+            return []
+        
+        cached = []
+        for item in self.cache_dir.iterdir():
+            if item.is_dir() and self._is_cached(item):
+                cached.append(item.name)
+        
+        return sorted(cached)
     
     def get_cached_artifacts(self, pdf_path: Path) -> Optional[Dict[str, Any]]:
         """Get all cached artifacts without reprocessing."""
