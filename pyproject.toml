@@ -10,8 +10,13 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
-    "qdrant-client>=1.11.0",
+    # Docling para parseo estructurado de PDFs y chunking
+    "docling>=2.0.0",
+    "docling-core>=2.0.0",
+    # sentence-transformers para embeddings locales (BAAI/bge-m3)
     "sentence-transformers>=3.0.0",
+    # Qdrant para vector store (se agregará en Fase 2)
+    # "qdrant-client>=1.11.0",
 ]
 
 [dependency-groups]

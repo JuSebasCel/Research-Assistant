@@ -7,6 +7,7 @@ de qué configuración existe y elimina la validación de tipos.
 """
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,8 +28,8 @@ class Settings(BaseSettings):
     )
 
     # --- Entorno de ejecución ---
-    environment: str = "development"
-    log_level: str = "INFO"
+    environment: Literal["development", "testing", "production"] = "development"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     # --- Base de datos ---
     database_url: str = (
@@ -43,6 +44,10 @@ class Settings(BaseSettings):
     # --- Embeddings ---
     embedding_model_name: str = "intfloat/multilingual-e5-large"
     embedding_dimension: int = 1024
+
+    # --- Cache y almacenamiento ---
+    cache_dir: str = "data/cache"
+    audit_dir: str = "data/audit"
 
     # --- Placeholders para etapas futuras (LLM / embeddings) ---
     # Se agregarán campos aquí cuando construyamos los providers reales.

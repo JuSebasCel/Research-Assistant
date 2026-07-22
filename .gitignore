@@ -17,8 +17,14 @@ wheels/
 # Data and storage
 data/qdrant_storage/
 data/uploads/
+data/audit/
+data/cache/
+data/scripts
+data/audit*
+scripts
 *.pdf
-
+audit*
+falta 
 # IDE
 .idea/
 *.swp
