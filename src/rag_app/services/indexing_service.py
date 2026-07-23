@@ -287,7 +287,73 @@ class IndexingService:
         logger.info(f"✓ Encontrados {len(results)} resultados")
 
         return results
-    
+
+    def search_across_documents(
+        self,
+        query: str,
+        max_total: int = 10,
+        per_doc_top_k: int = 3,
+        page_filter: Optional[int] = None,
+        heading_contains: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Búsqueda híbrida repetida por cada documento indexado, en vez de
+        una sola búsqueda global.
+
+        Una búsqueda global (sin document_filter) no garantiza representación
+        de todos los documentos: si uno domina el ranking (más chunks,
+        contenido más denso para la query), los demás pueden quedar
+        completamente afuera aunque también sean relevantes — confirmado
+        con datos reales (ver chat_service.py). Buscar documento por
+        documento y juntar los resultados evita ese sesgo.
+
+        Args:
+            query: Consulta del usuario
+            max_total: Tope de chunks en el resultado final (tras juntar
+                y ordenar por score los resultados de todos los documentos)
+            per_doc_top_k: Cuántos candidatos trae cada documento antes de
+                juntar y recortar
+            page_filter: Opcional, restringe a una página específica
+            heading_contains: Opcional, filtrar por texto libre en headings
+
+        Returns:
+            Lista de chunks relevantes con scores, ordenada de mayor a
+            menor score, con representación de cada documento indexado
+            (hasta per_doc_top_k por documento)
+        """
+        logger.info(f"Búsqueda multi-documento: '{query}' (max_total={max_total})")
+
+        # Los vectores de la query se calculan una sola vez y se reusan en
+        # cada búsqueda por documento — evita pagar el costo de embedding
+        # una vez por documento (el costo caro es encode(), no la búsqueda
+        # en Qdrant en sí, que es barata).
+        dense_query_vector = self.embedding_provider.encode_single(query, mode="query")
+        sparse_query_vector = self.sparse_embedding_provider.encode_single(query, mode="query")
+
+        documents = self.vector_repository.list_documents()
+
+        all_results: List[Dict[str, Any]] = []
+        for document_name in documents:
+            results = self.vector_repository.search(
+                dense_query_vector=dense_query_vector,
+                sparse_query_vector=sparse_query_vector,
+                limit=per_doc_top_k,
+                document_filter=document_name,
+                page_filter=page_filter,
+                heading_contains=heading_contains,
+            )
+            all_results.extend(results)
+
+        all_results.sort(key=lambda r: r["score"], reverse=True)
+        final_results = all_results[:max_total]
+
+        logger.info(
+            f"✓ {len(final_results)} resultados de {len(documents)} documentos "
+            f"({len(all_results)} candidatos antes de recortar)"
+        )
+
+        return final_results
+
     def get_stats(self) -> Dict[str, Any]:
         """
         Obtiene estadísticas del estado de la indexación.

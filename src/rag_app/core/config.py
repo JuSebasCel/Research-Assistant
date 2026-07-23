@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     # --- Cache y almacenamiento ---
     cache_dir: str = "data/cache"
     audit_dir: str = "data/audit"
+    uploads_dir: str = "data/uploads"
 
     # --- LLM (Gemini) ---
     gemini_api_key: str = ""

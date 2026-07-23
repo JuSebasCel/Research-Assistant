@@ -7,6 +7,7 @@ forma de los eventos de streaming — todo con GeminiProvider mockeado
 from unittest.mock import MagicMock
 
 import pytest
+from google.genai import errors as genai_errors
 
 from rag_app.services.chat_service import ChatService
 
@@ -68,6 +69,50 @@ def test_answer_stream_yields_chunks_then_done_with_citations(
         assert citation["image_urls"] == []  # sample_chunks no traen imágenes
 
     fake_llm_provider.generate_stream.assert_called_once()
+
+
+def test_quota_exceeded_yields_clear_error_event(
+    indexing_service, sample_chunks_json, tmp_path
+):
+    provider = MagicMock()
+
+    def raise_quota_error(system, prompt, images=None):
+        raise genai_errors.ClientError(
+            429, {"error": {"message": "quota stuff", "status": "RESOURCE_EXHAUSTED"}}
+        )
+        yield  # pragma: no cover - hace de esto un generador, nunca se llega acá
+
+    provider.generate_stream.side_effect = raise_quota_error
+    indexing_service.index_document(sample_chunks_json, "doc_a")
+    service = ChatService(indexing_service, provider, tmp_path, min_score_threshold=0.0)
+
+    events = list(service.answer_stream("The Transformer architecture"))
+
+    assert events == [
+        {
+            "type": "error",
+            "error": "Se acabó la cuota gratuita de Gemini por hoy. Intenta más tarde.",
+        }
+    ]
+
+
+def test_other_gemini_error_yields_generic_error_event(
+    indexing_service, sample_chunks_json, tmp_path
+):
+    provider = MagicMock()
+
+    def raise_server_error(system, prompt, images=None):
+        raise genai_errors.ServerError(500, {"error": {"message": "boom", "status": "INTERNAL"}})
+        yield  # pragma: no cover
+
+    provider.generate_stream.side_effect = raise_server_error
+    indexing_service.index_document(sample_chunks_json, "doc_a")
+    service = ChatService(indexing_service, provider, tmp_path, min_score_threshold=0.0)
+
+    events = list(service.answer_stream("The Transformer architecture"))
+
+    assert len(events) == 1
+    assert events[0]["type"] == "error"
 
 
 def test_build_prompt_includes_document_name_pages_and_question(tmp_path):

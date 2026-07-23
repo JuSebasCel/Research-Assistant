@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ArrowUp, Check, Copy, Sparkles } from "lucide-react";
-import type { Message } from "../hooks/useChatSession";
+import type { Message } from "../hooks/useConversations";
 import { Markdown } from "./Markdown";
 
 interface ChatViewProps {

@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from rag_app.api.chat import router as chat_router
 from rag_app.api.documents import router as documents_router
+from rag_app.api.ingest import router as ingest_router
 from rag_app.core.config import get_settings
 from rag_app.core.logging_config import configure_logging
 
@@ -62,6 +63,7 @@ app.mount("/static/cache", StaticFiles(directory=_cache_dir), name="cache")
 
 app.include_router(chat_router)
 app.include_router(documents_router)
+app.include_router(ingest_router)
 
 
 @app.get("/health")

@@ -80,3 +80,39 @@ def test_search_uses_query_prefix_for_dense_and_passes_filters_through(
 
     sparse_call = indexing_service.sparse_embedding_provider.encode_single.call_args
     assert sparse_call.kwargs["mode"] == "query"
+
+
+def test_search_across_documents_includes_every_document(
+    indexing_service, sample_chunks_json
+):
+    # Mismos 3 chunks indexados bajo dos documentos distintos: una búsqueda
+    # global sin fan-out podría dejar uno afuera si el otro "gana" el
+    # ranking; con fan-out ambos deben quedar representados.
+    indexing_service.index_document(sample_chunks_json, "doc_a")
+    indexing_service.index_document(sample_chunks_json, "doc_b")
+
+    results = indexing_service.search_across_documents("some query", max_total=10)
+
+    documents_present = {r["document_name"] for r in results}
+    assert documents_present == {"doc_a", "doc_b"}
+
+
+def test_search_across_documents_respects_per_doc_and_max_total_caps(
+    indexing_service, sample_chunks_json
+):
+    indexing_service.index_document(sample_chunks_json, "doc_a")
+    indexing_service.index_document(sample_chunks_json, "doc_b")
+
+    # 3 chunks por documento disponibles, pero per_doc_top_k=1 limita a 1
+    # cada uno -> a lo sumo 2 candidatos entre los dos, aunque max_total sea mayor.
+    results = indexing_service.search_across_documents(
+        "some query", max_total=10, per_doc_top_k=1
+    )
+
+    assert len(results) == 2
+
+    # max_total corta el total aunque cada documento aporte más.
+    results_capped = indexing_service.search_across_documents(
+        "some query", max_total=3, per_doc_top_k=3
+    )
+    assert len(results_capped) == 3

@@ -14,6 +14,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from google.genai import errors as genai_errors
+
 from rag_app.providers.llm import GeminiProvider
 from rag_app.services.indexing_service import IndexingService
 
@@ -92,14 +94,29 @@ class ChatService:
             - {"type": "no_results"} — no hay contenido suficientemente relevante
             - {"type": "chunk", "text": "..."} — fragmento de la respuesta
             - {"type": "done", "citations": [...]} — fin, con las fuentes usadas
+            - {"type": "error", "error": "..."} — falló la generación (ej. cuota
+              de Gemini agotada); el stream termina ahí, sin "done"
         """
-        results = self.indexing_service.search(
-            query=query,
-            top_k=top_k,
-            document_filter=document_filter,
-            page_filter=page_filter,
-            heading_contains=heading_contains,
-        )
+        # Sin document_filter, una sola búsqueda global puede dejar afuera
+        # documentos relevantes que no ganan el ranking (confirmado con
+        # datos reales) — hacemos fan-out por cada documento indexado en
+        # su lugar. Con un documento específico, la búsqueda ya está bien
+        # acotada y no hace falta.
+        if document_filter is None:
+            results = self.indexing_service.search_across_documents(
+                query=query,
+                max_total=top_k,
+                page_filter=page_filter,
+                heading_contains=heading_contains,
+            )
+        else:
+            results = self.indexing_service.search(
+                query=query,
+                top_k=top_k,
+                document_filter=document_filter,
+                page_filter=page_filter,
+                heading_contains=heading_contains,
+            )
 
         if not results or results[0]["score"] < self.min_score_threshold:
             logger.info(f"Sin resultados suficientemente relevantes para: '{query}'")
@@ -109,10 +126,26 @@ class ChatService:
         user_prompt = self._build_prompt(query, results)
         images = self._load_images(results)
 
-        for text_chunk in self.llm_provider.generate_stream(
-            SYSTEM_INSTRUCTION, user_prompt, images=images
-        ):
-            yield {"type": "chunk", "text": text_chunk}
+        try:
+            for text_chunk in self.llm_provider.generate_stream(
+                SYSTEM_INSTRUCTION, user_prompt, images=images
+            ):
+                yield {"type": "chunk", "text": text_chunk}
+        except genai_errors.ClientError as e:
+            if e.code == 429 or e.status == "RESOURCE_EXHAUSTED":
+                logger.warning(f"Cuota de Gemini agotada: {e.message}")
+                yield {
+                    "type": "error",
+                    "error": "Se acabó la cuota gratuita de Gemini por hoy. Intenta más tarde.",
+                }
+            else:
+                logger.error(f"Error de Gemini: {e.message}")
+                yield {"type": "error", "error": f"Error al generar la respuesta: {e.message}"}
+            return
+        except genai_errors.APIError as e:
+            logger.error(f"Error de Gemini: {e}")
+            yield {"type": "error", "error": "Error al generar la respuesta. Intenta de nuevo."}
+            return
 
         citations = [
             {

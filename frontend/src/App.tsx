@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { SourcesPanel } from "./components/SourcesPanel";
-import { useChatSession } from "./hooks/useChatSession";
+import { useConversations } from "./hooks/useConversations";
 import { fetchDocuments } from "./lib/api";
 
 export default function App() {
@@ -11,13 +11,26 @@ export default function App() {
   const [documentsError, setDocumentsError] = useState<string | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<string | null>(null);
 
-  const { messages, isStreaming, ask } = useChatSession();
+  const {
+    conversations,
+    activeConversationId,
+    messages,
+    isStreaming,
+    createConversation,
+    switchConversation,
+    ask,
+  } = useConversations();
 
-  useEffect(() => {
+  const loadDocuments = () => {
+    setDocumentsLoading(true);
     fetchDocuments()
       .then(setDocuments)
       .catch((err) => setDocumentsError(err instanceof Error ? err.message : String(err)))
       .finally(() => setDocumentsLoading(false));
+  };
+
+  useEffect(() => {
+    loadDocuments();
   }, []);
 
   const handleAsk = (query: string) => {
@@ -38,6 +51,11 @@ export default function App() {
         error={documentsError}
         selected={selectedDocument}
         onSelect={setSelectedDocument}
+        onUploaded={loadDocuments}
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        onNewConversation={createConversation}
+        onSwitchConversation={switchConversation}
       />
       <ChatView
         documentFilter={selectedDocument}

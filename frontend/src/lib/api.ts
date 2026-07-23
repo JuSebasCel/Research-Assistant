@@ -10,7 +10,15 @@ export interface Citation {
 export type ChatEvent =
   | { type: "chunk"; text: string }
   | { type: "done"; citations: Citation[] }
-  | { type: "no_results" };
+  | { type: "no_results" }
+  | { type: "error"; error: string };
+
+export type IngestStage = "uploading" | "extracting" | "chunking" | "indexing";
+
+export type IngestEvent =
+  | { type: "stage"; stage: IngestStage; message: string }
+  | { type: "done"; document_name: string; chunks_indexed: number }
+  | { type: "error"; error: string };
 
 export interface ChatRequest {
   query: string;

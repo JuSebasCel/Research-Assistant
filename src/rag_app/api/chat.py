@@ -1,6 +1,5 @@
 """Router de chat: POST /chat, respuesta en streaming (SSE)."""
 
-import json
 import logging
 from collections.abc import Iterator
 from functools import lru_cache
@@ -10,6 +9,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from rag_app.core.config import Settings, get_settings
+from rag_app.core.sse import format_sse
 from rag_app.models.chat import ChatRequest
 from rag_app.providers.embeddings import EmbeddingProvider
 from rag_app.providers.llm import GeminiProvider
@@ -70,15 +70,14 @@ def get_indexing_service(
     return chat_service.indexing_service
 
 
-def _sse_format(chat_service: ChatService, request: ChatRequest) -> Iterator[str]:
-    for event in chat_service.answer_stream(
+def _events(chat_service: ChatService, request: ChatRequest) -> Iterator[dict]:
+    yield from chat_service.answer_stream(
         query=request.query,
         top_k=request.top_k,
         document_filter=request.document_filter,
         page_filter=request.page_filter,
         heading_contains=request.heading_contains,
-    ):
-        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+    )
 
 
 @router.post("/chat")
@@ -87,6 +86,6 @@ async def chat(
     chat_service: ChatService = Depends(get_chat_service),
 ) -> StreamingResponse:
     return StreamingResponse(
-        _sse_format(chat_service, request),
+        format_sse(_events(chat_service, request)),
         media_type="text/event-stream",
     )
