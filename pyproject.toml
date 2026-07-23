@@ -15,8 +15,7 @@ dependencies = [
     "docling-core>=2.0.0",
     # sentence-transformers para embeddings locales (BAAI/bge-m3)
     "sentence-transformers>=3.0.0",
-    # Qdrant para vector store (se agregará en Fase 2)
-    # "qdrant-client>=1.11.0",
+    # Qdrant para vector store + fastembed para embeddings sparse (BM25)
     "qdrant-client>=1.11.0",
     "fastembed>=0.8.0",
 ]
@@ -26,6 +25,11 @@ dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "ruff>=0.7.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that load real ML models (dense + sparse embeddings) instead of mocks",
 ]
 
 [tool.ruff]
