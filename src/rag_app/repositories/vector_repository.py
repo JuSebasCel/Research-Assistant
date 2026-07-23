@@ -20,13 +20,26 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
     VectorParams,
+    SparseVectorParams,
+    SparseVector,
+    Modifier,
     PointStruct,
+    Prefetch,
+    FusionQuery,
+    Fusion,
     Filter,
     FieldCondition,
     MatchValue,
+    MatchAny,
+    MatchText,
 )
 
 logger = logging.getLogger(__name__)
+
+# Nombres de los named vectors dentro de cada punto. Qdrant requiere
+# nombrar los vectores cuando una colección combina denso + sparse.
+DENSE_VECTOR_NAME = "dense"
+SPARSE_VECTOR_NAME = "sparse"
 
 
 class VectorRepository:
@@ -58,29 +71,41 @@ class VectorRepository:
     def ensure_collection_exists(self) -> None:
         """
         Verifica que la colección existe, si no la crea.
-        
+
         Operación idempotente: si la colección ya existe, no hace nada.
-        Usa distancia COSINE para similitud (apropiado para embeddings normalizados).
+        Crea dos named vectors por punto:
+        - "dense": embedding semántico (e5), distancia COSINE.
+        - "sparse": embedding léxico (BM25 vía fastembed), con
+          Modifier.IDF para que Qdrant calcule el IDF real sobre el
+          corpus indexado al momento de buscar (fastembed solo aporta
+          la frecuencia de término al indexar).
         """
         try:
             collections = self.client.get_collections().collections
             collection_exists = any(
                 col.name == self.collection_name for col in collections
             )
-            
+
             if not collection_exists:
                 logger.info(f"Creando colección '{self.collection_name}'")
                 self.client.create_collection(
                     collection_name=self.collection_name,
-                    vectors_config=VectorParams(
-                        size=self.vector_size,
-                        distance=Distance.COSINE,
-                    ),
+                    vectors_config={
+                        DENSE_VECTOR_NAME: VectorParams(
+                            size=self.vector_size,
+                            distance=Distance.COSINE,
+                        ),
+                    },
+                    sparse_vectors_config={
+                        SPARSE_VECTOR_NAME: SparseVectorParams(
+                            modifier=Modifier.IDF,
+                        ),
+                    },
                 )
                 logger.info(f"✓ Colección '{self.collection_name}' creada")
             else:
                 logger.debug(f"Colección '{self.collection_name}' ya existe")
-        
+
         except Exception as e:
             logger.error(f"Error al verificar/crear colección: {e}")
             raise
@@ -89,38 +114,41 @@ class VectorRepository:
         self,
         document_name: str,
         chunks_data: List[Dict[str, Any]],
-        embeddings: List[List[float]],
+        dense_embeddings: List[List[float]],
+        sparse_embeddings: List[SparseVector],
     ) -> int:
         """
-        Inserta o actualiza chunks con sus embeddings en Qdrant.
-        
+        Inserta o actualiza chunks con sus embeddings (dense + sparse) en Qdrant.
+
         Usa UUIDs determinísticos basados en document_name + chunk_id,
         lo que hace la operación idempotente: si vuelves a indexar el
         mismo documento, los puntos se actualizan en lugar de duplicarse.
-        
+
         Args:
             document_name: Nombre del documento (para namespace de UUIDs)
             chunks_data: Lista de dicts con datos de chunks (de chunks.json)
-            embeddings: Lista de vectores (misma longitud que chunks_data)
-        
+            dense_embeddings: Vectores semánticos (misma longitud que chunks_data)
+            sparse_embeddings: Vectores léxicos BM25 (misma longitud que chunks_data)
+
         Returns:
             Número de puntos insertados
-        
+
         Raises:
             ValueError: Si las longitudes no coinciden
         """
-        if len(chunks_data) != len(embeddings):
+        if len(chunks_data) != len(dense_embeddings) or len(chunks_data) != len(sparse_embeddings):
             raise ValueError(
-                f"Mismatch: {len(chunks_data)} chunks pero {len(embeddings)} embeddings"
+                f"Mismatch: {len(chunks_data)} chunks, {len(dense_embeddings)} dense "
+                f"embeddings, {len(sparse_embeddings)} sparse embeddings"
             )
-        
+
         if not chunks_data:
             logger.warning("No hay chunks para insertar")
             return 0
-        
+
         points = []
-        
-        for chunk, embedding in zip(chunks_data, embeddings):
+
+        for chunk, dense_vec, sparse_vec in zip(chunks_data, dense_embeddings, sparse_embeddings):
             # UUID determinístico: mismo documento + mismo chunk = mismo UUID
             point_id = str(
                 uuid.uuid5(
@@ -155,7 +183,10 @@ class VectorRepository:
             points.append(
                 PointStruct(
                     id=point_id,
-                    vector=embedding,
+                    vector={
+                        DENSE_VECTOR_NAME: dense_vec,
+                        SPARSE_VECTOR_NAME: sparse_vec,
+                    },
                     payload=payload,
                 )
             )
@@ -175,47 +206,99 @@ class VectorRepository:
             logger.error(f"Error al insertar puntos en Qdrant: {e}")
             raise
     
+    def _build_filter(
+        self,
+        document_filter: Optional[str] = None,
+        page_filter: Optional[int] = None,
+        heading_contains: Optional[str] = None,
+    ) -> Optional[Filter]:
+        """
+        Arma un Filter de Qdrant a partir de condiciones opcionales sobre
+        la metadata ya presente en el payload (document_name, pages,
+        headings). Devuelve None si no se pidió ningún filtro.
+        """
+        conditions = []
+
+        if document_filter:
+            conditions.append(
+                FieldCondition(key="document_name", match=MatchValue(value=document_filter))
+            )
+
+        if page_filter is not None:
+            # "pages" es una lista por punto; MatchAny hace match si el
+            # valor está contenido en esa lista.
+            conditions.append(
+                FieldCondition(key="pages", match=MatchAny(any=[page_filter]))
+            )
+
+        if heading_contains:
+            # Búsqueda de texto libre sobre "headings" (complementaria al
+            # BM25 sobre "content").
+            conditions.append(
+                FieldCondition(key="headings", match=MatchText(text=heading_contains))
+            )
+
+        if not conditions:
+            return None
+
+        return Filter(must=conditions)
+
     def search(
         self,
-        query_vector: List[float],
+        dense_query_vector: List[float],
+        sparse_query_vector: SparseVector,
         limit: int = 5,
         score_threshold: Optional[float] = None,
         document_filter: Optional[str] = None,
+        page_filter: Optional[int] = None,
+        heading_contains: Optional[str] = None,
+        fetch_k: int = 20,
     ) -> List[Dict[str, Any]]:
         """
-        Búsqueda vectorial por similitud coseno.
-        
+        Búsqueda híbrida: fusiona resultados de la señal densa (semántica,
+        coseno) y la señal sparse (léxica, BM25) mediante RRF nativo de
+        Qdrant.
+
         Args:
-            query_vector: Vector de la consulta (ya embedido con prefijo "query:")
-            limit: Número máximo de resultados
-            score_threshold: Umbral mínimo de score (0-1 para cosine)
+            dense_query_vector: Vector semántico de la consulta (prefijo "query:")
+            sparse_query_vector: Vector léxico de la consulta (query_embed)
+            limit: Número máximo de resultados finales (post-fusión)
+            score_threshold: Umbral mínimo de score RRF
             document_filter: Opcional, filtrar por document_name específico
-        
+            page_filter: Opcional, filtrar por número de página
+            heading_contains: Opcional, filtrar por texto libre en headings
+            fetch_k: Cuántos candidatos trae cada señal (dense/sparse) antes
+                de fusionar; debe ser >= limit para que RRF tenga margen
+
         Returns:
             Lista de resultados con score y payload
         """
         try:
-            # Construir filtro si es necesario
-            query_filter = None
-            if document_filter:
-                query_filter = Filter(
-                    must=[
-                        FieldCondition(
-                            key="document_name",
-                            match=MatchValue(value=document_filter),
-                        )
-                    ]
-                )
+            query_filter = self._build_filter(document_filter, page_filter, heading_contains)
 
             # client.search() fue removido en qdrant-client >=1.14; la API
-            # vigente es query_points(), que devuelve un QueryResponse (.points)
-            # en vez de una lista directa de ScoredPoint.
+            # vigente es query_points(). Para hybrid search se usa prefetch
+            # (una búsqueda por cada named vector) + FusionQuery(RRF), que
+            # Qdrant resuelve server-side.
             response = self.client.query_points(
                 collection_name=self.collection_name,
-                query=query_vector,
+                prefetch=[
+                    Prefetch(
+                        query=dense_query_vector,
+                        using=DENSE_VECTOR_NAME,
+                        limit=fetch_k,
+                        filter=query_filter,
+                    ),
+                    Prefetch(
+                        query=sparse_query_vector,
+                        using=SPARSE_VECTOR_NAME,
+                        limit=fetch_k,
+                        filter=query_filter,
+                    ),
+                ],
+                query=FusionQuery(fusion=Fusion.RRF),
                 limit=limit,
                 score_threshold=score_threshold,
-                query_filter=query_filter,
             )
 
             # Formatear resultados
@@ -232,11 +315,11 @@ class VectorRepository:
                     "image_paths": result.payload.get("image_paths", []),
                     "token_count": result.payload.get("token_count", 0),
                 })
-            
+
             return formatted_results
-        
+
         except Exception as e:
-            logger.error(f"Error en búsqueda vectorial: {e}")
+            logger.error(f"Error en búsqueda híbrida: {e}")
             raise
     
     def delete_document(self, document_name: str) -> int:

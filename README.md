@@ -137,12 +137,14 @@ cat data/cache/paper/chunks/chunks_audit.md
 - ✅ Vinculación de chunks con imágenes para RAG multimodal
 - ✅ Corrección de running headers mal clasificados
 - ✅ OCR configurable (desactivado por defecto)
+- ✅ Pipeline de embeddings + indexación (chunks.json → Qdrant, idempotente)
+- ✅ Búsqueda híbrida (BM25 + vectorial + RRF) con filtrado por metadata (página, headings)
 
 **En desarrollo:**
 - ⏳ Pipeline de ingesta (endpoint para subir papers)
-- ⏳ Búsqueda híbrida (BM25 + vectorial + RRF)
 - ⏳ Integración con LLM
 - ⏳ Endpoint de chat
+- ⏳ Reranking con cross-encoder (evaluar si hace falta tras medir calidad del RRF)
 
 ## Decisiones Técnicas
 

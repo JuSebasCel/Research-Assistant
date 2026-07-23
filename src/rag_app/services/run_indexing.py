@@ -29,12 +29,14 @@ import argparse
 import logging
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from rag_app.core.config import get_settings
 from rag_app.providers.embeddings import EmbeddingProvider
+from rag_app.providers.sparse_embeddings import SparseEmbeddingProvider
 from rag_app.providers.qdrant_client import create_qdrant_client
 from rag_app.repositories.vector_repository import VectorRepository
 from rag_app.services.indexing_service import IndexingService
@@ -65,27 +67,29 @@ def create_services() -> tuple[IndexingService, VectorRepository]:
     """
     settings = get_settings()
     
-    # Embedding provider
+    # Embedding providers (dense + sparse)
     embedding_provider = EmbeddingProvider(
         model_name=settings.embedding_model_name
     )
-    
+    sparse_embedding_provider = SparseEmbeddingProvider()
+
     # Qdrant client
     qdrant_client = create_qdrant_client(settings)
-    
+
     # Vector repository
     vector_repository = VectorRepository(
         client=qdrant_client,
         collection_name=settings.qdrant_collection_name,
         vector_size=settings.embedding_dimension,
     )
-    
+
     # Asegurar que la colección existe
     vector_repository.ensure_collection_exists()
-    
+
     # Indexing service
     indexing_service = IndexingService(
         embedding_provider=embedding_provider,
+        sparse_embedding_provider=sparse_embedding_provider,
         vector_repository=vector_repository,
         batch_size=32,  # Batch size óptimo para e5-large
     )
@@ -239,14 +243,21 @@ def index_all(cache_dir: Path) -> int:
         return 1
 
 
-def search(query: str, top_k: int = 5) -> int:
+def search(
+    query: str,
+    top_k: int = 5,
+    page_filter: Optional[int] = None,
+    heading_contains: Optional[str] = None,
+) -> int:
     """
-    Búsqueda de prueba.
-    
+    Búsqueda de prueba (híbrida: semántica + léxica con fusión RRF).
+
     Args:
         query: Consulta del usuario
         top_k: Número de resultados
-    
+        page_filter: Opcional, restringe a una página específica
+        heading_contains: Opcional, restringe por texto libre en headings
+
     Returns:
         0 si éxito, 1 si error
     """
@@ -254,15 +265,17 @@ def search(query: str, top_k: int = 5) -> int:
     logger.info(f"Búsqueda: '{query}'")
     logger.info("=" * 80)
     logger.info("")
-    
+
     try:
         # Crear servicios
         indexing_service, _ = create_services()
-        
+
         # Buscar
         results = indexing_service.search(
             query=query,
             top_k=top_k,
+            page_filter=page_filter,
+            heading_contains=heading_contains,
         )
         
         if not results:
@@ -395,6 +408,18 @@ Ejemplos:
         help="Número de resultados para búsqueda (default: 5)",
     )
     parser.add_argument(
+        "--page-filter",
+        type=int,
+        default=None,
+        help="Restringir búsqueda a una página específica",
+    )
+    parser.add_argument(
+        "--heading-contains",
+        type=str,
+        default=None,
+        help="Restringir búsqueda por texto libre en headings",
+    )
+    parser.add_argument(
         "--stats",
         action="store_true",
         help="Mostrar estadísticas de la colección",
@@ -422,7 +447,12 @@ Ejemplos:
             return show_stats()
         
         elif args.search:
-            return search(args.search, args.top_k)
+            return search(
+                args.search,
+                args.top_k,
+                page_filter=args.page_filter,
+                heading_contains=args.heading_contains,
+            )
         
         elif args.all:
             if args.document_name:
