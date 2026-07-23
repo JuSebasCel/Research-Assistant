@@ -14,39 +14,10 @@ lento que el resto de la suite, ~10-15s de carga de modelos la primera vez).
 
 import pytest
 
-from rag_app.providers.embeddings import EmbeddingProvider
-from rag_app.providers.sparse_embeddings import SparseEmbeddingProvider
-from rag_app.repositories.vector_repository import VectorRepository
-from rag_app.services.indexing_service import IndexingService
-
 pytestmark = pytest.mark.integration
 
-REAL_VECTOR_SIZE = 1024
-
-
-@pytest.fixture(scope="session")
-def real_embedding_provider():
-    return EmbeddingProvider(model_name="intfloat/multilingual-e5-large")
-
-
-@pytest.fixture(scope="session")
-def real_sparse_embedding_provider():
-    return SparseEmbeddingProvider()
-
-
-@pytest.fixture
-def real_indexing_service(
-    qdrant_memory_client, real_embedding_provider, real_sparse_embedding_provider
-):
-    repo = VectorRepository(
-        client=qdrant_memory_client,
-        collection_name="integration_test",
-        vector_size=REAL_VECTOR_SIZE,
-    )
-    repo.ensure_collection_exists()
-    return IndexingService(
-        real_embedding_provider, real_sparse_embedding_provider, repo, batch_size=32
-    )
+# real_indexing_service (+ real_embedding_provider / real_sparse_embedding_provider)
+# vive en conftest.py para poder reusarse en test_chat_integration.py.
 
 
 def test_hybrid_search_end_to_end_with_real_models(real_indexing_service, sample_chunks_json):

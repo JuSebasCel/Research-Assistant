@@ -26,7 +26,7 @@ src/rag_app/
 
 **Base de datos vectorial:** Qdrant almacena los embeddings y metadata de cada chunk. Soporta búsqueda híbrida nativa (sparse + dense vectors) lo cual es crítico para combinar búsqueda léxica (BM25) y semántica (ANN).
 
-**LLM:** OpenAI GPT-4o-mini para generación de respuestas. Balance entre costo y calidad.
+**LLM:** Google Gemini (`gemini-2.5-flash`) para generación de respuestas. Tier gratuito real e indefinido (sin tarjeta, ~1500 req/día vía Google AI Studio) — a diferencia de OpenAI, que solo da un crédito único de $5 que expira en 3 meses.
 
 **Chunking:** HybridChunker oficial de Docling. Divide respetando estructura semántica y contextualiza con headings/metadata.
 
@@ -139,11 +139,11 @@ cat data/cache/paper/chunks/chunks_audit.md
 - ✅ OCR configurable (desactivado por defecto)
 - ✅ Pipeline de embeddings + indexación (chunks.json → Qdrant, idempotente)
 - ✅ Búsqueda híbrida (BM25 + vectorial + RRF) con filtrado por metadata (página, headings)
+- ✅ Integración con LLM (Gemini) + endpoint de chat con streaming (SSE), umbral de confianza y citas obligatorias — implementado y con tests unitarios; falta validación end-to-end en vivo hasta configurar `GEMINI_API_KEY`
 
 **En desarrollo:**
 - ⏳ Pipeline de ingesta (endpoint para subir papers)
-- ⏳ Integración con LLM
-- ⏳ Endpoint de chat
+- ⏳ Fan-out multi-documento para preguntas de comparación entre varios papers
 - ⏳ Reranking con cross-encoder (evaluar si hace falta tras medir calidad del RRF)
 
 ## Decisiones Técnicas

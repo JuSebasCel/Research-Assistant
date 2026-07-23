@@ -9,12 +9,18 @@ para que los tests ejerciten el código de parseo real (chunk["metadata"]
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.models import SparseVector
 
+from rag_app.providers.embeddings import EmbeddingProvider
+from rag_app.providers.sparse_embeddings import SparseEmbeddingProvider
 from rag_app.repositories.vector_repository import VectorRepository
+from rag_app.services.indexing_service import IndexingService
+
+REAL_VECTOR_SIZE = 1024
 
 # Dimensión pequeña a propósito: los tests de VectorRepository/IndexingService
 # (con providers mockeados) no necesitan vectores e5 reales de 1024 dims,
@@ -114,3 +120,54 @@ def vector_repo(qdrant_memory_client) -> VectorRepository:
     )
     repo.ensure_collection_exists()
     return repo
+
+
+def make_fake_providers():
+    """EmbeddingProvider y SparseEmbeddingProvider falsos: devuelven un
+    vector por texto sin importar el contenido, suficiente para probar
+    orquestación sin cargar modelos reales."""
+    fake_dense = [0.1, 0.2, 0.3, 0.4]
+    fake_sparse = SparseVector(indices=[1], values=[1.0])
+
+    embedding_provider = MagicMock()
+    embedding_provider.encode.side_effect = lambda texts, mode: [fake_dense for _ in texts]
+    embedding_provider.encode_single.side_effect = lambda text, mode: fake_dense
+
+    sparse_provider = MagicMock()
+    sparse_provider.encode.side_effect = lambda texts, mode: [fake_sparse for _ in texts]
+    sparse_provider.encode_single.side_effect = lambda text, mode: fake_sparse
+
+    return embedding_provider, sparse_provider
+
+
+@pytest.fixture
+def indexing_service(vector_repo) -> IndexingService:
+    embedding_provider, sparse_provider = make_fake_providers()
+    return IndexingService(embedding_provider, sparse_provider, vector_repo, batch_size=2)
+
+
+@pytest.fixture(scope="session")
+def real_embedding_provider():
+    """Modelo e5-large real. Session-scoped: cargarlo toma ~8s, se paga una
+    sola vez por corrida de tests en vez de por test."""
+    return EmbeddingProvider(model_name="intfloat/multilingual-e5-large")
+
+
+@pytest.fixture(scope="session")
+def real_sparse_embedding_provider():
+    return SparseEmbeddingProvider()
+
+
+@pytest.fixture
+def real_indexing_service(
+    qdrant_memory_client, real_embedding_provider, real_sparse_embedding_provider
+):
+    repo = VectorRepository(
+        client=qdrant_memory_client,
+        collection_name="integration_test",
+        vector_size=REAL_VECTOR_SIZE,
+    )
+    repo.ensure_collection_exists()
+    return IndexingService(
+        real_embedding_provider, real_sparse_embedding_provider, repo, batch_size=32
+    )

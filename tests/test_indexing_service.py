@@ -3,38 +3,12 @@ Tests de IndexingService con providers de embeddings mockeados (rápidos,
 sin cargar modelos reales) pero VectorRepository real contra Qdrant en
 memoria — así se valida la orquestación real sin pagar el costo de
 cargar e5-large/BM25 en cada test.
+
+Los fixtures `indexing_service` / `make_fake_providers` viven en conftest.py
+para poder reusarse en test_chat_service.py.
 """
 
-from unittest.mock import MagicMock
-
 import pytest
-from qdrant_client.models import SparseVector
-
-from rag_app.services.indexing_service import IndexingService
-
-
-def make_fake_providers():
-    """EmbeddingProvider y SparseEmbeddingProvider falsos: devuelven un
-    vector por texto sin importar el contenido, suficiente para probar
-    el batching/orquestación de IndexingService."""
-    fake_dense = [0.1, 0.2, 0.3, 0.4]
-    fake_sparse = SparseVector(indices=[1], values=[1.0])
-
-    embedding_provider = MagicMock()
-    embedding_provider.encode.side_effect = lambda texts, mode: [fake_dense for _ in texts]
-    embedding_provider.encode_single.side_effect = lambda text, mode: fake_dense
-
-    sparse_provider = MagicMock()
-    sparse_provider.encode.side_effect = lambda texts, mode: [fake_sparse for _ in texts]
-    sparse_provider.encode_single.side_effect = lambda text, mode: fake_sparse
-
-    return embedding_provider, sparse_provider
-
-
-@pytest.fixture
-def indexing_service(vector_repo):
-    embedding_provider, sparse_provider = make_fake_providers()
-    return IndexingService(embedding_provider, sparse_provider, vector_repo, batch_size=2)
 
 
 def test_index_document_indexes_all_chunks_and_uses_both_embedding_types(

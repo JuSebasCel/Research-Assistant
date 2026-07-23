@@ -6,10 +6,20 @@ módulo debe leer `os.environ` directamente: eso dispersa el conocimiento
 de qué configuración existe y elimina la validación de tipos.
 """
 
+import os
 from functools import lru_cache
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Evita que sentence-transformers/transformers hagan HEAD requests a
+# Hugging Face Hub en cada arranque solo para chequear si hay una versión
+# más nueva del modelo (el modelo ya está cacheado localmente). Sin esto,
+# cada reinicio del proceso (ej. --reload) paga latencia de red extra
+# antes de responder la primera pregunta. setdefault() respeta si el
+# usuario ya seteó esto explícitamente (ej. para forzar descarga de un
+# modelo nuevo la primera vez).
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 
 class Settings(BaseSettings):
@@ -49,8 +59,12 @@ class Settings(BaseSettings):
     cache_dir: str = "data/cache"
     audit_dir: str = "data/audit"
 
-    # --- Placeholders para etapas futuras (LLM / embeddings) ---
-    # Se agregarán campos aquí cuando construyamos los providers reales.
+    # --- LLM (Gemini) ---
+    gemini_api_key: str = ""
+    # "gemini-2.5-flash" fue retirado para cuentas nuevas (404 real, no una
+    # suposición) — usamos el alias que Google mantiene apuntando siempre
+    # al Flash vigente, para no volver a romper cuando roten el nombre.
+    gemini_model_name: str = "gemini-flash-latest"
 
 
 @lru_cache

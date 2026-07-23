@@ -1,0 +1,56 @@
+@import "tailwindcss";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+
+@theme {
+  /* Inter: diseñada para parecerse a SF Pro, autohosteada (no depende de
+     que el sistema operativo del usuario tenga San Francisco instalada) */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+
+  /* Paleta cálida estilo Claude.ai: crema/hueso, no blanco ni negro puro */
+  --color-canvas: #f7f5f1;
+  --color-surface: #fffdf9;
+  --color-surface-dark: #2a2823;
+  --color-canvas-dark: #1f1e1b;
+
+  /* Acento terracota/arcilla en vez de azul saturado */
+  --color-accent: #c15f3c;
+  --color-accent-hover: #ab5233;
+
+  --color-ink: #2b2822;
+  --color-ink-secondary: #7c7568;
+  --color-ink-dark: #f0ece4;
+  --color-ink-secondary-dark: #a89e8e;
+
+  --color-user-bubble: #ede7dc;
+  --color-user-bubble-dark: #35322b;
+
+  --radius-panel: 1.25rem;
+  --radius-bubble: 1.125rem;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Scrollbars discretos, estilo macOS (finos, sin flechas, translúcidos) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+  * {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+}
