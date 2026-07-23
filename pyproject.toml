@@ -17,6 +17,7 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     # Qdrant para vector store (se agregará en Fase 2)
     # "qdrant-client>=1.11.0",
+    "qdrant-client>=1.11.0",
 ]
 
 [dependency-groups]
