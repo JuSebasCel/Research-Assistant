@@ -10,16 +10,15 @@ Usage:
     python scripts/run_chunking.py --all --force --verbose
 """
 
-import sys
 import argparse
 import logging
+import sys
 from pathlib import Path
 
-# Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from rag_app.services.docling_extractor import DoclingExtractor
 from rag_app.services.docling_chunker import DoclingChunker
+from rag_app.services.docling_extractor import DoclingExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,9 @@ def setup_logging(verbose: bool) -> None:
         logging.getLogger("docling").setLevel(logging.WARNING)
 
 
-def create_services(cache_dir: Path, enable_ocr: bool = False) -> tuple[DoclingExtractor, DoclingChunker]:
+def create_services(
+    cache_dir: Path, enable_ocr: bool = False
+) -> tuple[DoclingExtractor, DoclingChunker]:
     """Initialize extractor and chunker services."""
     extractor = DoclingExtractor(
         cache_dir=cache_dir,
@@ -71,17 +72,13 @@ def process_pdf(
     logger.info("=" * 80)
     
     try:
-        # Initialize services
         extractor, chunker = create_services(cache_dir, enable_ocr)
         
-        # Extract (service handles cache)
         doc = extractor.extract(pdf_path=pdf_path, force_reprocess=False)
         logger.info("✓ Extraction complete")
         
-        # Get figures index for linking chunks to images
         figures_index = extractor.get_figures_index(document_name)
         
-        # Chunk (service handles cache)
         chunks = chunker.chunk_document(
             doc=doc,
             document_name=document_name,
@@ -90,7 +87,6 @@ def process_pdf(
         )
         logger.info(f"✓ Generated {len(chunks)} chunks")
         
-        # Show output location
         chunks_dir = cache_dir / document_name / "chunks"
         logger.info(f"✓ Saved to {chunks_dir}/")
         logger.info("")
@@ -114,10 +110,8 @@ def process_all(
     logger.info("")
     
     try:
-        # Initialize services
         extractor, chunker = create_services(cache_dir, enable_ocr)
         
-        # Get cached documents
         cached_docs = extractor.list_cached_documents()
         
         if not cached_docs:
@@ -130,22 +124,18 @@ def process_all(
         
         logger.info(f"Found {len(cached_docs)} document(s)\n")
         
-        # Process each
         success_count = 0
         for doc_name in cached_docs:
             logger.info(f"Processing: {doc_name}")
             
             try:
-                # Load document (from extractor cache)
                 doc = extractor.load_document(doc_name)
                 if doc is None:
-                    logger.error(f"  ✗ Could not load from cache")
+                    logger.error("  ✗ Could not load from cache")
                     continue
                 
-                # Get figures index for linking chunks to images
                 figures_index = extractor.get_figures_index(doc_name)
                 
-                # Chunk (chunker handles its cache)
                 chunks = chunker.chunk_document(
                     doc=doc,
                     document_name=doc_name,
@@ -159,7 +149,6 @@ def process_all(
             except Exception as e:
                 logger.error(f"  ✗ Error: {e}\n")
         
-        # Summary
         logger.info("=" * 80)
         logger.info(f"Processed: {success_count}/{len(cached_docs)} documents")
         logger.info("=" * 80)
@@ -187,22 +176,24 @@ Examples:
     parser.add_argument("pdf_path", nargs="?", type=Path, help="Path to PDF file")
     parser.add_argument("--all", action="store_true", help="Process all cached documents")
     parser.add_argument("--force", action="store_true", help="Force re-chunking")
-    parser.add_argument("--ocr", action="store_true", help="Activar OCR (usar solo con PDFs escaneados)")
+    parser.add_argument(
+        "--ocr", action="store_true", help="Activar OCR (usar solo con PDFs escaneados)"
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
-    parser.add_argument("--cache-dir", type=Path, default=Path("data/cache"), help="Cache directory")
+    parser.add_argument(
+        "--cache-dir", type=Path, default=Path("data/cache"), help="Cache directory"
+    )
     
     args = parser.parse_args()
     
     setup_logging(args.verbose)
     
-    # Validate
     if not args.all and not args.pdf_path:
         parser.error("Provide a PDF path or use --all")
     
     if args.all and args.pdf_path:
         logger.warning("--all specified, ignoring PDF path\n")
     
-    # Process
     try:
         if args.all:
             return process_all(args.cache_dir, args.force, args.ocr)

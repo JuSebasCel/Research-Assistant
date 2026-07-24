@@ -1,55 +1,60 @@
-"""
-Servicio de ingesta: sube un PDF nuevo y lo procesa completo (extracción +
-chunking + indexación), emitiendo eventos de progreso por etapa.
-
-Orquesta exactamente lo que ya hacen run_chunking.py + run_indexing.py por
-CLI (DoclingExtractor -> DoclingChunker -> IndexingService), sin lógica de
-pipeline nueva — el único agregado es reportar cada etapa como evento en
-vez de solo loguearla, para que la interfaz pueda mostrar progreso vía SSE.
-"""
+"""Sube un PDF, lo extrae/chunkea/indexa, y emite un evento de progreso por
+etapa (mismo pipeline que run_chunking.py + run_indexing.py, vía CLI)."""
 
 import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from docling_core.types.doc import DocItemLabel
+
 from rag_app.services.docling_chunker import DoclingChunker
 from rag_app.services.docling_extractor import DoclingExtractor
+from rag_app.services.document_metadata_service import DocumentMetadataService
 from rag_app.services.indexing_service import IndexingService
 
 logger = logging.getLogger(__name__)
 
 
-class IngestService:
-    """Orquesta extracción + chunking + indexación de un PDF subido, con
-    progreso por etapas en vez de una llamada bloqueante ciega."""
+def _extract_title(doc: Any) -> str | None:
+    """
+    Heurística barata (sin llamar al LLM) para el título real del paper:
+    primero busca un item TITLE explícito de Docling; si no hay, el primer
+    section_header sirve de aproximación razonable; si tampoco, no hay
+    título confiable y el caller cae al nombre de archivo.
+    """
+    section_header_fallback: str | None = None
+    for item in doc.texts:
+        if item.label == DocItemLabel.TITLE:
+            return item.text.strip()
+        if section_header_fallback is None and item.label == DocItemLabel.SECTION_HEADER:
+            section_header_fallback = item.text.strip()
+    return section_header_fallback
 
+
+class IngestService:
     def __init__(
         self,
         extractor: DoclingExtractor,
         chunker: DoclingChunker,
         indexing_service: IndexingService,
+        document_metadata_service: DocumentMetadataService,
         uploads_dir: Path,
         cache_dir: Path,
     ):
         self.extractor = extractor
         self.chunker = chunker
         self.indexing_service = indexing_service
+        self.document_metadata_service = document_metadata_service
         self.uploads_dir = uploads_dir
         self.cache_dir = cache_dir
 
     def ingest_stream(self, pdf_bytes: bytes, filename: str) -> Iterator[dict[str, Any]]:
         """
-        Guarda el PDF y lo procesa de punta a punta, cediendo (yield) un
-        evento por etapa para que el caller pueda transmitirlo por SSE.
-
-        El progreso es por etapa, no por porcentaje continuo: extracción y
-        chunking son llamadas síncronas bloqueantes de Docling, no hay
-        manera de reportar avance fino dentro de ellas.
+        Progreso por etapa, no por porcentaje: extracción y chunking son
+        llamadas bloqueantes de Docling, sin forma de medir avance fino.
         """
-        # Path(filename).name descarta cualquier componente de directorio
-        # (ej. "../../etc/passwd") — el nombre viene de un upload HTTP, no
-        # es de confianza.
+        # El nombre viene de un upload HTTP, no es de confianza (path traversal).
         safe_filename = Path(filename).name
         document_name = Path(safe_filename).stem
 
@@ -69,6 +74,13 @@ class IngestService:
                 "message": "Extrayendo estructura del PDF...",
             }
             doc = self.extractor.extract(pdf_path=pdf_path, force_reprocess=False)
+
+            # overwrite=False: no pisa un rename manual ya hecho.
+            title = _extract_title(doc)
+            if title:
+                self.document_metadata_service.set_display_name(
+                    document_name, title, overwrite=False
+                )
 
             yield {
                 "type": "stage",

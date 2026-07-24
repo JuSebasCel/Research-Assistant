@@ -1,37 +1,26 @@
-"""
-Repository para operaciones con Qdrant (vector database).
-
-Encapsula todas las operaciones CRUD sobre la base de datos vectorial,
-aislando la lógica de negocio de los detalles de implementación de Qdrant.
-
-Responsabilidades:
-- Crear/verificar colecciones
-- Upsert de puntos (con batch)
-- Búsqueda vectorial
-- Eliminación de documentos
-- Estadísticas de la colección
-"""
+"""Repository de operaciones CRUD sobre la colección Qdrant (crear/verificar,
+upsert, búsqueda híbrida, borrado, estadísticas)."""
 
 import logging
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
-    VectorParams,
-    SparseVectorParams,
-    SparseVector,
+    FieldCondition,
+    Filter,
+    Fusion,
+    FusionQuery,
+    MatchAny,
+    MatchText,
+    MatchValue,
     Modifier,
     PointStruct,
     Prefetch,
-    FusionQuery,
-    Fusion,
-    Filter,
-    FieldCondition,
-    MatchValue,
-    MatchAny,
-    MatchText,
+    SparseVector,
+    SparseVectorParams,
+    VectorParams,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,42 +32,22 @@ SPARSE_VECTOR_NAME = "sparse"
 
 
 class VectorRepository:
-    """
-    Repository para operaciones vectoriales con Qdrant.
-    
-    Maneja la persistencia de embeddings y metadata de chunks en Qdrant.
-    Todos los métodos son idempotentes donde sea posible.
-    """
-    
     def __init__(
         self,
         client: QdrantClient,
         collection_name: str,
         vector_size: int,
     ):
-        """
-        Inicializa el repository.
-        
-        Args:
-            client: Cliente Qdrant configurado
-            collection_name: Nombre de la colección a usar
-            vector_size: Dimensión de los vectores (debe coincidir con modelo de embeddings)
-        """
         self.client = client
         self.collection_name = collection_name
         self.vector_size = vector_size
     
     def ensure_collection_exists(self) -> None:
         """
-        Verifica que la colección existe, si no la crea.
-
-        Operación idempotente: si la colección ya existe, no hace nada.
-        Crea dos named vectors por punto:
-        - "dense": embedding semántico (e5), distancia COSINE.
-        - "sparse": embedding léxico (BM25 vía fastembed), con
-          Modifier.IDF para que Qdrant calcule el IDF real sobre el
-          corpus indexado al momento de buscar (fastembed solo aporta
-          la frecuencia de término al indexar).
+        Idempotente. Crea dos named vectors por punto: "dense" (e5,
+        COSINE) y "sparse" (BM25 vía fastembed, con Modifier.IDF para que
+        Qdrant calcule el IDF real sobre el corpus indexado al buscar —
+        fastembed solo aporta la frecuencia de término al indexar).
         """
         try:
             collections = self.client.get_collections().collections
@@ -113,29 +82,12 @@ class VectorRepository:
     def upsert_chunks(
         self,
         document_name: str,
-        chunks_data: List[Dict[str, Any]],
-        dense_embeddings: List[List[float]],
-        sparse_embeddings: List[SparseVector],
+        chunks_data: list[dict[str, Any]],
+        dense_embeddings: list[list[float]],
+        sparse_embeddings: list[SparseVector],
     ) -> int:
-        """
-        Inserta o actualiza chunks con sus embeddings (dense + sparse) en Qdrant.
-
-        Usa UUIDs determinísticos basados en document_name + chunk_id,
-        lo que hace la operación idempotente: si vuelves a indexar el
-        mismo documento, los puntos se actualizan en lugar de duplicarse.
-
-        Args:
-            document_name: Nombre del documento (para namespace de UUIDs)
-            chunks_data: Lista de dicts con datos de chunks (de chunks.json)
-            dense_embeddings: Vectores semánticos (misma longitud que chunks_data)
-            sparse_embeddings: Vectores léxicos BM25 (misma longitud que chunks_data)
-
-        Returns:
-            Número de puntos insertados
-
-        Raises:
-            ValueError: Si las longitudes no coinciden
-        """
+        """UUID determinístico (document_name + chunk_id) hace la operación
+        idempotente: re-indexar el mismo documento actualiza en vez de duplicar."""
         if len(chunks_data) != len(dense_embeddings) or len(chunks_data) != len(sparse_embeddings):
             raise ValueError(
                 f"Mismatch: {len(chunks_data)} chunks, {len(dense_embeddings)} dense "
@@ -149,26 +101,18 @@ class VectorRepository:
         points = []
 
         for chunk, dense_vec, sparse_vec in zip(chunks_data, dense_embeddings, sparse_embeddings):
-            # UUID determinístico: mismo documento + mismo chunk = mismo UUID
             point_id = str(
-                uuid.uuid5(
-                    uuid.NAMESPACE_DNS,
-                    f"{document_name}:{chunk['chunk_id']}"
-                )
+                uuid.uuid5(uuid.NAMESPACE_DNS, f"{document_name}:{chunk['chunk_id']}")
             )
-            
-            # Extraer metadata relevante (NO todo docling_meta crudo)
+
             meta = chunk["metadata"]["docling_meta"]
-            
-            # Extraer páginas de provenance
             pages = sorted({
                 prov["page_no"]
                 for doc_item in meta.get("doc_items", [])
                 for prov in doc_item.get("prov", [])
                 if "page_no" in prov
             })
-            
-            # Payload limpio: solo lo necesario para filtrado y display
+
             payload = {
                 "document_name": document_name,
                 "chunk_id": chunk["chunk_id"],
@@ -191,27 +135,21 @@ class VectorRepository:
                 )
             )
         
-        # Upsert en Qdrant
         try:
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=points,
-            )
-            logger.info(
-                f"✓ {len(points)} chunks indexados para '{document_name}'"
-            )
+            self.client.upsert(collection_name=self.collection_name, points=points)
+            logger.info(f"✓ {len(points)} chunks indexados para '{document_name}'")
             return len(points)
-        
+
         except Exception as e:
             logger.error(f"Error al insertar puntos en Qdrant: {e}")
             raise
     
     def _build_filter(
         self,
-        document_filter: Optional[str] = None,
-        page_filter: Optional[int] = None,
-        heading_contains: Optional[str] = None,
-    ) -> Optional[Filter]:
+        document_filter: str | None = None,
+        page_filter: int | None = None,
+        heading_contains: str | None = None,
+    ) -> Filter | None:
         """
         Arma un Filter de Qdrant a partir de condiciones opcionales sobre
         la metadata ya presente en el payload (document_name, pages,
@@ -245,34 +183,18 @@ class VectorRepository:
 
     def search(
         self,
-        dense_query_vector: List[float],
+        dense_query_vector: list[float],
         sparse_query_vector: SparseVector,
         limit: int = 5,
-        score_threshold: Optional[float] = None,
-        document_filter: Optional[str] = None,
-        page_filter: Optional[int] = None,
-        heading_contains: Optional[str] = None,
+        score_threshold: float | None = None,
+        document_filter: str | None = None,
+        page_filter: int | None = None,
+        heading_contains: str | None = None,
         fetch_k: int = 20,
-    ) -> List[Dict[str, Any]]:
-        """
-        Búsqueda híbrida: fusiona resultados de la señal densa (semántica,
-        coseno) y la señal sparse (léxica, BM25) mediante RRF nativo de
-        Qdrant.
-
-        Args:
-            dense_query_vector: Vector semántico de la consulta (prefijo "query:")
-            sparse_query_vector: Vector léxico de la consulta (query_embed)
-            limit: Número máximo de resultados finales (post-fusión)
-            score_threshold: Umbral mínimo de score RRF
-            document_filter: Opcional, filtrar por document_name específico
-            page_filter: Opcional, filtrar por número de página
-            heading_contains: Opcional, filtrar por texto libre en headings
-            fetch_k: Cuántos candidatos trae cada señal (dense/sparse) antes
-                de fusionar; debe ser >= limit para que RRF tenga margen
-
-        Returns:
-            Lista de resultados con score y payload
-        """
+    ) -> list[dict[str, Any]]:
+        """Fusiona la señal densa (coseno) y sparse (BM25) vía RRF nativo de
+        Qdrant. fetch_k es cuántos candidatos trae cada señal antes de
+        fusionar, debe ser >= limit para que RRF tenga margen."""
         try:
             query_filter = self._build_filter(document_filter, page_filter, heading_contains)
 
@@ -301,7 +223,6 @@ class VectorRepository:
                 score_threshold=score_threshold,
             )
 
-            # Formatear resultados
             formatted_results = []
             for result in response.points:
                 formatted_results.append({
@@ -323,61 +244,34 @@ class VectorRepository:
             raise
     
     def delete_document(self, document_name: str) -> int:
-        """
-        Elimina todos los chunks de un documento.
-        
-        Args:
-            document_name: Nombre del documento a eliminar
-        
-        Returns:
-            Número de puntos eliminados (aproximado)
-        """
         try:
-            # Contar primero cuántos puntos tiene el documento
             count_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="document_name",
-                        match=MatchValue(value=document_name),
-                    )
-                ]
+                must=[FieldCondition(key="document_name", match=MatchValue(value=document_name))]
             )
-            
-            # Qdrant no tiene count directo, hacemos scroll para contar
+
+            # Qdrant no tiene count directo, se usa scroll para contar.
             points, _ = self.client.scroll(
                 collection_name=self.collection_name,
                 scroll_filter=count_filter,
-                limit=10000,  # Suficiente para documentos grandes
+                limit=10000,
                 with_payload=False,
                 with_vectors=False,
             )
-            
+
             count = len(points)
-            
             if count == 0:
                 logger.warning(f"No se encontraron chunks para '{document_name}'")
                 return 0
-            
-            # Eliminar con filtro
-            self.client.delete(
-                collection_name=self.collection_name,
-                points_selector=count_filter,
-            )
-            
+
+            self.client.delete(collection_name=self.collection_name, points_selector=count_filter)
             logger.info(f"✓ Eliminados ~{count} chunks de '{document_name}'")
             return count
-        
+
         except Exception as e:
             logger.error(f"Error al eliminar documento: {e}")
             raise
-    
-    def get_collection_stats(self) -> Dict[str, Any]:
-        """
-        Obtiene estadísticas de la colección.
-        
-        Returns:
-            Dict con información de la colección
-        """
+
+    def get_collection_stats(self) -> dict[str, Any]:
         try:
             info = self.client.get_collection(self.collection_name)
 
@@ -395,31 +289,23 @@ class VectorRepository:
             logger.error(f"Error al obtener stats de colección: {e}")
             raise
     
-    def list_documents(self) -> List[str]:
-        """
-        Lista todos los documentos únicos en la colección.
-        
-        Returns:
-            Lista de nombres de documentos
-        """
+    def list_documents(self) -> list[str]:
         try:
-            # Scroll sobre toda la colección (solo payload, no vectores)
             points, _ = self.client.scroll(
                 collection_name=self.collection_name,
                 limit=10000,
                 with_payload=True,
                 with_vectors=False,
             )
-            
-            # Extraer document_names únicos
+
             document_names = {
                 point.payload.get("document_name")
                 for point in points
                 if point.payload.get("document_name")
             }
-            
+
             return sorted(document_names)
-        
+
         except Exception as e:
             logger.error(f"Error al listar documentos: {e}")
             raise

@@ -116,3 +116,20 @@ def test_search_across_documents_respects_per_doc_and_max_total_caps(
         "some query", max_total=3, per_doc_top_k=3
     )
     assert len(results_capped) == 3
+
+
+def test_search_across_documents_restricts_to_given_subset(
+    indexing_service, sample_chunks_json
+):
+    # doc_a, doc_b y doc_c quedan indexados, pero solo se pide fan-out
+    # sobre doc_a y doc_c (simula "todos los documentos de esta carpeta").
+    indexing_service.index_document(sample_chunks_json, "doc_a")
+    indexing_service.index_document(sample_chunks_json, "doc_b")
+    indexing_service.index_document(sample_chunks_json, "doc_c")
+
+    results = indexing_service.search_across_documents(
+        "some query", max_total=10, document_names=["doc_a", "doc_c"]
+    )
+
+    documents_present = {r["document_name"] for r in results}
+    assert documents_present == {"doc_a", "doc_c"}

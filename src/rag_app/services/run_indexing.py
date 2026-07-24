@@ -8,36 +8,29 @@ Pipeline:
     chunks.json → EmbeddingProvider → VectorRepository → Qdrant
 
 Usage:
-    # Indexar documento específico
     python src/rag_app/services/run_indexing.py paper
     
-    # Indexar todos los documentos en cache
     python src/rag_app/services/run_indexing.py --all
     
-    # Re-indexar (elimina e indexa nuevamente)
     python src/rag_app/services/run_indexing.py paper --reindex
     
-    # Buscar (testing)
     python src/rag_app/services/run_indexing.py --search "exosomes wound healing"
     
-    # Ver estadísticas
     python src/rag_app/services/run_indexing.py --stats
 """
 
-import sys
 import argparse
 import logging
-from pathlib import Path
+import sys
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
 
-# Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from rag_app.core.config import get_settings
 from rag_app.providers.embeddings import EmbeddingProvider
-from rag_app.providers.sparse_embeddings import SparseEmbeddingProvider
 from rag_app.providers.qdrant_client import create_qdrant_client
+from rag_app.providers.sparse_embeddings import SparseEmbeddingProvider
 from rag_app.repositories.vector_repository import VectorRepository
 from rag_app.services.indexing_service import IndexingService
 
@@ -67,26 +60,21 @@ def create_services() -> tuple[IndexingService, VectorRepository]:
     """
     settings = get_settings()
     
-    # Embedding providers (dense + sparse)
     embedding_provider = EmbeddingProvider(
         model_name=settings.embedding_model_name
     )
     sparse_embedding_provider = SparseEmbeddingProvider()
 
-    # Qdrant client
     qdrant_client = create_qdrant_client(settings)
 
-    # Vector repository
     vector_repository = VectorRepository(
         client=qdrant_client,
         collection_name=settings.qdrant_collection_name,
         vector_size=settings.embedding_dimension,
     )
 
-    # Asegurar que la colección existe
     vector_repository.ensure_collection_exists()
 
-    # Indexing service
     indexing_service = IndexingService(
         embedding_provider=embedding_provider,
         sparse_embedding_provider=sparse_embedding_provider,
@@ -118,7 +106,7 @@ def index_document(
     if not chunks_json.exists():
         logger.error(f"✗ No se encontró chunks.json para '{document_name}'")
         logger.error(f"  Ruta esperada: {chunks_json}")
-        logger.error(f"  Ejecuta primero: python src/rag_app/services/run_chunking.py")
+        logger.error("  Ejecuta primero: python src/rag_app/services/run_chunking.py")
         return 1
     
     logger.info("=" * 80)
@@ -129,10 +117,8 @@ def index_document(
     try:
         start_time = datetime.now()
         
-        # Crear servicios
         indexing_service, _ = create_services()
         
-        # Indexar o re-indexar
         if reindex:
             result = indexing_service.reindex_document(
                 chunks_json_path=chunks_json,
@@ -146,7 +132,6 @@ def index_document(
         
         elapsed = (datetime.now() - start_time).total_seconds()
         
-        # Mostrar resultados
         if "error" in result:
             logger.error(f"✗ Error: {result['error']}")
             return 1
@@ -190,10 +175,8 @@ def index_all(cache_dir: Path) -> int:
     try:
         start_time = datetime.now()
         
-        # Crear servicios
         indexing_service, _ = create_services()
         
-        # Indexar todos
         results = indexing_service.index_all_cached_documents(cache_dir)
         
         elapsed = (datetime.now() - start_time).total_seconds()
@@ -206,7 +189,6 @@ def index_all(cache_dir: Path) -> int:
             logger.info("  python src/rag_app/services/run_chunking.py data/uploads/paper.pdf")
             return 0
         
-        # Mostrar resumen
         success_count = sum(1 for r in results if "error" not in r)
         error_count = len(results) - success_count
         total_chunks = sum(r.get("chunks_indexed", 0) for r in results if "error" not in r)
@@ -246,8 +228,8 @@ def index_all(cache_dir: Path) -> int:
 def search(
     query: str,
     top_k: int = 5,
-    page_filter: Optional[int] = None,
-    heading_contains: Optional[str] = None,
+    page_filter: int | None = None,
+    heading_contains: str | None = None,
 ) -> int:
     """
     Búsqueda de prueba (híbrida: semántica + léxica con fusión RRF).
@@ -267,10 +249,8 @@ def search(
     logger.info("")
 
     try:
-        # Crear servicios
         indexing_service, _ = create_services()
 
-        # Buscar
         results = indexing_service.search(
             query=query,
             top_k=top_k,
@@ -284,7 +264,6 @@ def search(
             logger.info("  python src/rag_app/services/run_indexing.py --stats")
             return 0
         
-        # Mostrar resultados
         logger.info(f"Encontrados {len(results)} resultados:\n")
         
         for i, result in enumerate(results, 1):
@@ -328,10 +307,8 @@ def show_stats() -> int:
     logger.info("")
     
     try:
-        # Crear servicios
         indexing_service, _ = create_services()
         
-        # Stats de colección
         stats = indexing_service.get_stats()
         
         logger.info("Colección:")
@@ -340,7 +317,6 @@ def show_stats() -> int:
         logger.info(f"  Estado:          {stats['status']}")
         logger.info("")
         
-        # Lista de documentos
         documents = indexing_service.list_indexed_documents()
         
         if documents:

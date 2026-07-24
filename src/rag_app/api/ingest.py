@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, UploadFile
 from fastapi.responses import StreamingResponse
 
 from rag_app.api.chat import get_chat_service
+from rag_app.api.documents import get_document_metadata_service
 from rag_app.core.config import Settings, get_settings
 from rag_app.core.sse import format_sse
 from rag_app.services.chat_service import ChatService
@@ -23,12 +24,8 @@ router = APIRouter()
 
 @lru_cache
 def get_ingest_service() -> IngestService:
-    """
-    Reusa el IndexingService ya construido por get_chat_service() (evita
-    cargar el modelo de embeddings dos veces) y solo levanta lo que falta:
-    extractor y chunker de Docling, iguales en configuración a los que usa
-    la CLI (run_chunking.py).
-    """
+    """Reusa el IndexingService de get_chat_service(), solo levanta el
+    extractor/chunker de Docling (misma configuración que la CLI)."""
     settings: Settings = get_settings()
     cache_dir = Path(settings.cache_dir)
 
@@ -50,6 +47,7 @@ def get_ingest_service() -> IngestService:
         extractor=extractor,
         chunker=chunker,
         indexing_service=chat_service.indexing_service,
+        document_metadata_service=get_document_metadata_service(),
         uploads_dir=Path(settings.uploads_dir),
         cache_dir=cache_dir,
     )

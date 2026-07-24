@@ -1,11 +1,5 @@
-/**
- * Parseo de streams SSE compartido entre chat e ingesta.
- *
- * EventSource nativo no sirve para requests POST (solo soporta GET), así
- * que el parseo se hace a mano sobre un fetch() + ReadableStream. Extraído
- * de useConversations porque useIngest necesita exactamente la misma lógica
- * de framing (líneas "data: {...}" separadas por líneas en blanco).
- */
+// EventSource nativo no soporta POST, así que el parseo de SSE se hace a
+// mano sobre un fetch() + ReadableStream. Compartido entre chat e ingesta.
 export async function parseSSEStream<T>(
   body: ReadableStream<Uint8Array>,
   onEvent: (event: T) => void

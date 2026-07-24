@@ -35,17 +35,6 @@ class SparseEmbeddingProvider:
         texts: list[str],
         mode: Literal["query", "passage"] = "passage",
     ) -> list[SparseVector]:
-        """
-        Convierte una lista de textos en una lista de vectores sparse.
-
-        Args:
-            texts: Lista de strings a convertir
-            mode: "passage" para chunks de documentos (default),
-                  "query" para consultas del usuario
-
-        Returns:
-            Lista de SparseVector (indices + values) de qdrant_client
-        """
         embed_fn = self.model.query_embed if mode == "query" else self.model.embed
         sparse_embeddings = list(embed_fn(texts))
 
@@ -62,5 +51,4 @@ class SparseEmbeddingProvider:
         text: str,
         mode: Literal["query", "passage"] = "passage",
     ) -> SparseVector:
-        """Convierte un solo texto en vector sparse."""
         return self.encode([text], mode=mode)[0]

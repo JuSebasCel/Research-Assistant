@@ -1,0 +1,74 @@
+feat: add document organization, per-message sources, bring-your-own-key, and conversation management
+
+Large batch covering everything since the last commit. All backend tests
+pass (49/49, excluding two live-Gemini integration tests that fail only
+because today's extensive manual testing exhausted the free-tier quota —
+not a regression), frontend type-checks and lints clean.
+
+Chat quality fixes:
+- ChatService now always includes the full catalog of indexed document
+  names in the prompt, not just whatever the retrieval happened to return
+  for that query. Fixes a real bug: asking "what documents do
+  triggered a semantic search over that literal question, whic
+  reason to surface an actual enumeration, so the model either guessed
+  from irrelevant fragments or claimed not to know.
+- SYSTEM_INSTRUCTION gained a comparison-mode rule: when a question implies
+  contrasting multiple papers, the model structures its answer
+on the existing fan-out retrieval (no new retrieval logic needed).
+
+Document organization:
+- New DocumentMetadataService (JSON-backed, same pattern as other services)
+  stores a display name and an optional folder per document, independent
+  of document_name which stays the real Qdrant filter key.
+- IngestService now extracts a real paper title from Docling's parsed
+  structure (DocItemLabel.TITLE, falling back to the first section header)
+  and sets it as the display name on ingest, without overwriting a manual
+  rename from a previous ingest.
+- GET /documents returns {document_name, display_name, folder} instead of
+  bare strings; PATCH /documents/{name} updates either field.
+- search_across_documents gained a document_names param to scope fan-out
+  to a subset (a folder) instead of every indexed document; ChatRequest
+  gained document_filters (list) alongside the existing single-document
+  document_filter.
+- Sidebar: documents group by folder, folders are collapsible, and papers
+  can be dragged onto a folder header to move them there (native HTML5
+  drag-and-drop) alongside the existing manual rename/folder-assign inputs.
+
+Per-message sources instead of a side panel:
+- Removed the fixed SourcesPanel (only ever showed the latest answer's
+  citations); added MessageSources, a collapsed-by-default toggle under
+  each assistant message, since every message already carried its own
+  citations — this was mostly a UI relocation, not new data plumbing.
+- Mounted /static/uploads so each citation can link straight to the
+  original PDF at the cited page via the browser's native PDF
+  (#page=N), no new viewer dependency.
+
+Bring-your-own Gemini API key:
+- GeminiProvider.set_api_key() swaps the genai.Client in place (the client
+  is cheap to construct, unlike the local embedding model) so a key change
+  takes effect without restarting the server.
+- New AppSettingsService persists an optional override key to
+  data/app_settings.json (gitignored — this one holds a real secret, unlike
+  the other JSON-backed services in this app). GET/PATCH/DELET
+  /settings/gemini-key let the UI check status (never echoes the full key
+  back, only a suffix), save a personal key, or revert to the server's.
+
+Conversation management:
+- useConversations gained renameConversation, togglePin, and
+  deleteConversation; pinned conversations sort to the top. Si
+  all three as hover-revealed icons per conversation.
+- useIngest now accepts multiple files and uploads them sequentially
+  (the backend is single-process and CPU-bound on embedding, so parallel
+  uploads would only contend with each other, not go faster).
+
+UI fixes:
+- Long document/conversation names were overflowing their rounded
+  containers instead of truncating with an ellipsis — classic flexbox bug
+  (flex items default to min-width: auto, refusing to shrink b
+  size). Added min-w-0 at each affected flex boundary.
+- Documents section is now collapsible; both sections got dist
+  bordered/backgrounded panels instead of just a small-caps label, per
+  direct feedback that the separation wasn't visible enough.
+- Added a disabled, clearly-labeled "Importar desde arXiv / PubMed" button
+  to reserve the spot for a future bulk-import feature without building it
+  yet.

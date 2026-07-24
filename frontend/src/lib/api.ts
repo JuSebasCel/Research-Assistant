@@ -24,14 +24,63 @@ export interface ChatRequest {
   query: string;
   top_k?: number;
   document_filter?: string | null;
+  document_filters?: string[] | null;
   page_filter?: number | null;
   heading_contains?: string | null;
 }
 
-export async function fetchDocuments(): Promise<string[]> {
+export interface DocumentInfo {
+  document_name: string;
+  display_name: string;
+  folder: string | null;
+}
+
+export async function fetchDocuments(): Promise<DocumentInfo[]> {
   const res = await fetch(`${API_BASE}/documents`);
   if (!res.ok) {
     throw new Error(`No se pudo cargar la lista de documentos (${res.status})`);
   }
+  return res.json();
+}
+
+export async function updateDocument(
+  documentName: string,
+  update: { display_name?: string; folder?: string | null }
+): Promise<DocumentInfo> {
+  const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(documentName)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  if (!res.ok) {
+    throw new Error(`No se pudo actualizar el documento (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface GeminiKeyStatus {
+  has_custom_key: boolean;
+  key_hint: string | null;
+}
+
+export async function fetchGeminiKeyStatus(): Promise<GeminiKeyStatus> {
+  const res = await fetch(`${API_BASE}/settings/gemini-key`);
+  if (!res.ok) throw new Error(`No se pudo consultar la clave (${res.status})`);
+  return res.json();
+}
+
+export async function saveGeminiKey(apiKey: string): Promise<GeminiKeyStatus> {
+  const res = await fetch(`${API_BASE}/settings/gemini-key`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+  if (!res.ok) throw new Error(`No se pudo guardar la clave (${res.status})`);
+  return res.json();
+}
+
+export async function clearGeminiKey(): Promise<GeminiKeyStatus> {
+  const res = await fetch(`${API_BASE}/settings/gemini-key`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`No se pudo quitar la clave (${res.status})`);
   return res.json();
 }

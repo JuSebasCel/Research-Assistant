@@ -19,6 +19,7 @@ export interface Conversation {
   messages: Message[];
   createdAt: number;
   updatedAt: number;
+  pinned?: boolean;
 }
 
 export interface UseConversationsResult {
@@ -28,6 +29,9 @@ export interface UseConversationsResult {
   isStreaming: boolean;
   createConversation: () => void;
   switchConversation: (id: string) => void;
+  renameConversation: (id: string, title: string) => void;
+  togglePin: (id: string) => void;
+  deleteConversation: (id: string) => void;
   ask: (request: Omit<ChatRequest, "query"> & { query: string }) => Promise<void>;
 }
 
@@ -57,12 +61,8 @@ function makeConversation(title: string): Conversation {
   return { id: newId("conv"), title, messages: [], createdAt: now, updatedAt: now };
 }
 
-/**
- * Persiste múltiples conversaciones en localStorage (a diferencia de
- * useChatSession, que solo mantenía una en memoria y la perdía al
- * recargar). El backend es stateless por diseño — cada /chat es
- * independiente — así que toda la persistencia vive acá, en el cliente.
- */
+// El backend es stateless (cada /chat es independiente), así que toda la
+// persistencia de conversaciones vive acá, en localStorage.
 export function useConversations(): UseConversationsResult {
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
   const [activeConversationId, setActiveConversationId] = useState<string | null>(() => {
@@ -112,6 +112,36 @@ export function useConversations(): UseConversationsResult {
     abortRef.current?.abort();
     setActiveConversationId(id);
   }, []);
+
+  const renameConversation = useCallback(
+    (id: string, title: string) => {
+      const trimmed = title.trim();
+      if (!trimmed) return;
+      updateConversation(id, (c) => ({ ...c, title: trimmed }));
+    },
+    [updateConversation]
+  );
+
+  const togglePin = useCallback(
+    (id: string) => {
+      updateConversation(id, (c) => ({ ...c, pinned: !c.pinned }));
+    },
+    [updateConversation]
+  );
+
+  const deleteConversation = useCallback(
+    (id: string) => {
+      if (id === activeConversationId) abortRef.current?.abort();
+      setConversations((prev) => {
+        const remaining = prev.filter((c) => c.id !== id);
+        if (id === activeConversationId) {
+          setActiveConversationId(remaining[0]?.id ?? null);
+        }
+        return remaining;
+      });
+    },
+    [activeConversationId]
+  );
 
   const ask = useCallback(
     async (request: ChatRequest) => {
@@ -197,13 +227,22 @@ export function useConversations(): UseConversationsResult {
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) ?? null;
 
+  // Pineadas primero, cada grupo ordenado por actividad más reciente.
+  const sortedConversations = [...conversations].sort((a, b) => {
+    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+    return b.updatedAt - a.updatedAt;
+  });
+
   return {
-    conversations,
+    conversations: sortedConversations,
     activeConversationId,
     messages: activeConversation?.messages ?? [],
     isStreaming,
     createConversation,
     switchConversation,
+    renameConversation,
+    togglePin,
+    deleteConversation,
     ask,
   };
 }

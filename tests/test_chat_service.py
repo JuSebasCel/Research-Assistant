@@ -128,12 +128,48 @@ def test_build_prompt_includes_document_name_pages_and_question(tmp_path):
         }
     ]
 
-    prompt = service._build_prompt("What is scaled dot-product attention?", results)
+    prompt = service._build_prompt(
+        "What is scaled dot-product attention?", results, ["attallyouneed", "otropaper"]
+    )
 
     assert "attallyouneed" in prompt
     assert "página(s): 4" in prompt
     assert "Scaled dot-product attention computes..." in prompt
     assert "What is scaled dot-product attention?" in prompt
+
+
+def test_build_prompt_lists_all_documents_even_if_not_in_results(tmp_path):
+    service = ChatService(
+        indexing_service=MagicMock(), llm_provider=MagicMock(), cache_dir=tmp_path
+    )
+    results = [
+        {
+            "document_name": "doc_a",
+            "chunk_id": "chunk_0001",
+            "content": "algo relevante",
+            "pages": [1],
+        }
+    ]
+
+    # doc_b y doc_c no aparecen en los resultados del retrieval, pero
+    # igual deben quedar listados como parte del catálogo disponible.
+    prompt = service._build_prompt("pregunta", results, ["doc_a", "doc_b", "doc_c"])
+
+    assert "Documentos disponibles en el sistema: doc_a, doc_b, doc_c" in prompt
+
+
+def test_answer_stream_prompt_includes_full_document_catalog(
+    indexing_service, fake_llm_provider, sample_chunks_json, tmp_path
+):
+    indexing_service.index_document(sample_chunks_json, "doc_a")
+    indexing_service.index_document(sample_chunks_json, "doc_b")
+    service = ChatService(indexing_service, fake_llm_provider, tmp_path, min_score_threshold=0.0)
+
+    list(service.answer_stream("The Transformer architecture", document_filter="doc_a"))
+
+    prompt_sent = fake_llm_provider.generate_stream.call_args.args[1]
+    assert "doc_a" in prompt_sent
+    assert "doc_b" in prompt_sent
 
 
 def test_load_images_dedupes_caps_and_skips_missing_files(tmp_path):

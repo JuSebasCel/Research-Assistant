@@ -1,12 +1,5 @@
-"""
-Servicio de chat: orquesta hybrid search + generación con Gemini.
-
-Pipeline:
-    query -> IndexingService.search() (hybrid: BM25+dense+RRF)
-          -> umbral de confianza (corta antes de llamar al LLM si no hay
-             nada relevante, en vez de dejar que el modelo invente)
-          -> prompt con citas obligatorias -> GeminiProvider.generate_stream()
-"""
+"""Orquesta hybrid search + generación con Gemini: retrieval, umbral de
+confianza, prompt con citas obligatorias, streaming."""
 
 import logging
 import mimetypes
@@ -21,9 +14,6 @@ from rag_app.services.indexing_service import IndexingService
 
 logger = logging.getLogger(__name__)
 
-# Tope de imágenes por respuesta: evita disparar tokens/costo mandando
-# figuras de chunks solo marginalmente relevantes (top_k puede traer varios
-# chunks del mismo documento, cada uno con su propia imagen).
 MAX_IMAGES_PER_ANSWER = 4
 
 SYSTEM_INSTRUCTION = """Eres un asistente que responde preguntas sobre papers científicos \
@@ -36,7 +26,14 @@ con conocimiento general ni infieras más allá de lo que dicen los fragmentos.
 ("No encontré esa información en los documentos disponibles") en vez de inventar \
 o aproximar una respuesta.
 - Cada afirmación debe venir acompañada de su cita: nombre del documento y página, \
-tal como aparecen en los fragmentos (formato: [documento, p. X])."""
+tal como aparecen en los fragmentos (formato: [documento, p. X]).
+- Se te da además la lista completa de "Documentos disponibles en el sistema": \
+úsala solo para responder preguntas sobre qué documentos existen o si un paper \
+en particular está cargado. Nunca la uses como fuente de contenido — cualquier \
+afirmación sobre lo que dice un documento debe seguir viniendo de los fragmentos.
+- Si la pregunta pide comparar, contrastar, o encontrar diferencias o similitudes \
+entre varios documentos, estructura la respuesta explícitamente por documento \
+(usando su nombre como encabezado) antes de dar una conclusión final."""
 
 
 class ChatService:
@@ -53,25 +50,12 @@ class ChatService:
         min_score_threshold: float = 0.05,
     ):
         """
-        Args:
-            indexing_service: Servicio de retrieval ya construido (hybrid search)
-            llm_provider: Provider de Gemini
-            cache_dir: Directorio base de cache (donde viven las figuras:
-                cache_dir/{document_name}/{image_path})
-            min_score_threshold: Score RRF mínimo del mejor resultado para
-                intentar responder. Medido contra el corpus real: preguntas
-                claramente fuera de tema (clima, recetas, deportes) sacan
-                scores RRF de 0.33-0.5 — el mismo rango que preguntas
-                genuinamente relevantes (0.5-0.57). El score RRF es
-                puramente ranking relativo dentro de la colección, no
-                similitud absoluta: siempre hay un "candidato más cercano"
-                aunque sea irrelevante, y ese consigue un score decente
-                solo por quedar primero. Por eso este umbral se deja bajo
-                (solo filtra el caso de colección vacía / sin resultados) —
-                no puede distinguir de forma confiable "irrelevante pero
-                mejor rankeado" de "relevante"; esa distinción la hace el
-                LLM (ver SYSTEM_INSTRUCTION), que si demostró funcionar
-                bien en pruebas reales.
+        min_score_threshold se deja bajo a propósito: el score RRF es
+        ranking relativo dentro de la colección, no similitud absoluta, así
+        que preguntas fuera de tema (0.33-0.5) y relevantes (0.5-0.57) caen
+        en rangos casi idénticos. No distingue "irrelevante pero mejor
+        rankeado" de "relevante" — eso lo hace el LLM vía SYSTEM_INSTRUCTION.
+        Este umbral solo filtra el caso de colección vacía.
         """
         self.indexing_service = indexing_service
         self.llm_provider = llm_provider
@@ -83,31 +67,32 @@ class ChatService:
         query: str,
         top_k: int = 5,
         document_filter: str | None = None,
+        document_filters: list[str] | None = None,
         page_filter: int | None = None,
         heading_contains: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         """
         Genera la respuesta en streaming, con retrieval + citas.
 
+        document_filter acota a un solo documento; document_filters acota
+        el fan-out a un subconjunto (ej. una carpeta). Sin ninguno de los
+        dos, el fan-out corre sobre todos los documentos indexados — una
+        búsqueda global puede dejar afuera documentos relevantes que no
+        ganan el ranking.
+
         Yields:
-            Eventos con forma:
-            - {"type": "no_results"} — no hay contenido suficientemente relevante
-            - {"type": "chunk", "text": "..."} — fragmento de la respuesta
-            - {"type": "done", "citations": [...]} — fin, con las fuentes usadas
-            - {"type": "error", "error": "..."} — falló la generación (ej. cuota
-              de Gemini agotada); el stream termina ahí, sin "done"
+            - {"type": "no_results"}
+            - {"type": "chunk", "text": "..."}
+            - {"type": "done", "citations": [...]}
+            - {"type": "error", "error": "..."} — el stream termina sin "done"
         """
-        # Sin document_filter, una sola búsqueda global puede dejar afuera
-        # documentos relevantes que no ganan el ranking (confirmado con
-        # datos reales) — hacemos fan-out por cada documento indexado en
-        # su lugar. Con un documento específico, la búsqueda ya está bien
-        # acotada y no hace falta.
         if document_filter is None:
             results = self.indexing_service.search_across_documents(
                 query=query,
                 max_total=top_k,
                 page_filter=page_filter,
                 heading_contains=heading_contains,
+                document_names=document_filters,
             )
         else:
             results = self.indexing_service.search(
@@ -123,7 +108,10 @@ class ChatService:
             yield {"type": "no_results"}
             return
 
-        user_prompt = self._build_prompt(query, results)
+        # Lista completa siempre, no solo lo que trajo el retrieval — si no,
+        # "¿qué documentos tienes?" nunca tiene una respuesta real.
+        document_names = self.indexing_service.list_indexed_documents()
+        user_prompt = self._build_prompt(query, results, document_names)
         images = self._load_images(results)
 
         try:
@@ -187,8 +175,10 @@ class ChatService:
 
         return images
 
-    def _build_prompt(self, query: str, results: list[dict[str, Any]]) -> str:
-        """Arma el prompt de usuario: fragmentos recuperados + la pregunta."""
+    def _build_prompt(
+        self, query: str, results: list[dict[str, Any]], document_names: list[str]
+    ) -> str:
+        """Arma el prompt: catálogo de documentos + fragmentos recuperados + la pregunta."""
         fragments = []
         for r in results:
             pages = ", ".join(str(p) for p in r["pages"]) or "?"
@@ -197,4 +187,8 @@ class ChatService:
             )
 
         context = "\n\n---\n\n".join(fragments)
-        return f"Fragmentos disponibles:\n\n{context}\n\n---\n\nPregunta: {query}"
+        documents_line = "Documentos disponibles en el sistema: " + ", ".join(document_names)
+        return (
+            f"{documents_line}\n\n"
+            f"Fragmentos disponibles:\n\n{context}\n\n---\n\nPregunta: {query}"
+        )

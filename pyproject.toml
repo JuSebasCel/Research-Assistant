@@ -8,16 +8,12 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-    # Requerido por FastAPI para parsear multipart/form-data (POST /documents/upload)
-    "python-multipart>=0.0.12",
+    "python-multipart>=0.0.12",  # requerido por FastAPI para UploadFile
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
-    # Docling para parseo estructurado de PDFs y chunking
     "docling>=2.0.0",
     "docling-core>=2.0.0",
-    # sentence-transformers para embeddings locales (BAAI/bge-m3)
     "sentence-transformers>=3.0.0",
-    # Qdrant para vector store + fastembed para embeddings sparse (BM25)
     "qdrant-client>=1.11.0",
     "fastembed>=0.8.0",
     "google-genai>=2.14.0",

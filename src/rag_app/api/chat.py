@@ -16,6 +16,7 @@ from rag_app.providers.llm import GeminiProvider
 from rag_app.providers.qdrant_client import create_qdrant_client
 from rag_app.providers.sparse_embeddings import SparseEmbeddingProvider
 from rag_app.repositories.vector_repository import VectorRepository
+from rag_app.services.app_settings_service import AppSettingsService
 from rag_app.services.chat_service import ChatService
 from rag_app.services.indexing_service import IndexingService
 
@@ -25,13 +26,17 @@ router = APIRouter()
 
 
 @lru_cache
-def get_chat_service() -> ChatService:
-    """
-    Construye el grafo de servicios una sola vez por proceso (carga el
-    modelo de embeddings, que es costosa) y lo reutiliza en cada request,
-    igual que el patrón de create_services() en run_indexing.py.
-    """
+def get_app_settings_service() -> AppSettingsService:
     settings: Settings = get_settings()
+    return AppSettingsService(Path(settings.app_settings_path))
+
+
+@lru_cache
+def get_chat_service() -> ChatService:
+    """Construye el grafo de servicios una sola vez por proceso (el modelo
+    de embeddings es costoso de cargar) y lo reutiliza en cada request."""
+    settings: Settings = get_settings()
+    app_settings_service = get_app_settings_service()
 
     embedding_provider = EmbeddingProvider(model_name=settings.embedding_model_name)
     sparse_embedding_provider = SparseEmbeddingProvider()
@@ -50,8 +55,10 @@ def get_chat_service() -> ChatService:
         vector_repository=vector_repository,
     )
 
+    # Una key propia guardada desde la interfaz sobrevive un reinicio.
+    api_key = app_settings_service.get_gemini_api_key() or settings.gemini_api_key
     llm_provider = GeminiProvider(
-        api_key=settings.gemini_api_key,
+        api_key=api_key,
         model_name=settings.gemini_model_name,
     )
 
@@ -65,8 +72,6 @@ def get_chat_service() -> ChatService:
 def get_indexing_service(
     chat_service: ChatService = Depends(get_chat_service),
 ) -> IndexingService:
-    """Reusa el IndexingService ya construido dentro de ChatService (evita
-    levantar el grafo de servicios dos veces)."""
     return chat_service.indexing_service
 
 
@@ -75,6 +80,7 @@ def _events(chat_service: ChatService, request: ChatRequest) -> Iterator[dict]:
         query=request.query,
         top_k=request.top_k,
         document_filter=request.document_filter,
+        document_filters=request.document_filters,
         page_filter=request.page_filter,
         heading_contains=request.heading_contains,
     )

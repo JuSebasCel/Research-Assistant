@@ -1,10 +1,5 @@
-"""
-Configuración centralizada de la aplicación.
-
-Todas las variables de entorno del sistema pasan por aquí. Ningún otro
-módulo debe leer `os.environ` directamente: eso dispersa el conocimiento
-de qué configuración existe y elimina la validación de tipos.
-"""
+"""Configuración centralizada — toda variable de entorno pasa por acá,
+ningún otro módulo lee `os.environ` directamente."""
 
 import os
 from functools import lru_cache
@@ -12,25 +7,13 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Evita que sentence-transformers/transformers hagan HEAD requests a
-# Hugging Face Hub en cada arranque solo para chequear si hay una versión
-# más nueva del modelo (el modelo ya está cacheado localmente). Sin esto,
-# cada reinicio del proceso (ej. --reload) paga latencia de red extra
-# antes de responder la primera pregunta. setdefault() respeta si el
-# usuario ya seteó esto explícitamente (ej. para forzar descarga de un
-# modelo nuevo la primera vez).
+# El modelo de embeddings ya está cacheado localmente; sin esto,
+# sentence-transformers hace un HEAD request a HF Hub en cada arranque
+# solo para chequear versión, añadiendo latencia de red gratuita.
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 
 class Settings(BaseSettings):
-    """
-    Define el *contrato* de configuración de la aplicación.
-
-    Pydantic valida automáticamente tipos y presencia de cada campo al
-    arrancar la app. Si falta una variable requerida o tiene el tipo
-    incorrecto, la aplicación falla inmediatamente al iniciar (fail-fast).
-    """
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -59,25 +42,19 @@ class Settings(BaseSettings):
     cache_dir: str = "data/cache"
     audit_dir: str = "data/audit"
     uploads_dir: str = "data/uploads"
+    # No regenerable como cache_dir: un rename o carpeta puesta a mano no
+    # debe perderse si se limpia el cache.
+    document_metadata_path: str = "data/document_metadata.json"
+    # Contiene secretos (API keys propias de usuario) — ver .gitignore.
+    app_settings_path: str = "data/app_settings.json"
 
     # --- LLM (Gemini) ---
     gemini_api_key: str = ""
-    # "gemini-2.5-flash" fue retirado para cuentas nuevas (404 real, no una
-    # suposición) — usamos el alias que Google mantiene apuntando siempre
-    # al Flash vigente, para no volver a romper cuando roten el nombre.
+    # Alias que Google mantiene apuntando al Flash vigente; el nombre
+    # pinneado "gemini-2.5-flash" fue retirado para cuentas nuevas.
     gemini_model_name: str = "gemini-flash-latest"
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """
-    Devuelve una instancia única (singleton) de Settings.
-
-    Sin `lru_cache`, cada vez que alguien llame a `get_settings()` se
-    reconstruiría el objeto y se releería el .env desde disco. Con
-    `lru_cache`, la primera llamada construye el objeto; las siguientes
-    reciben la misma instancia ya creada. Esto importa porque vamos a
-    inyectar Settings en varios servicios y no queremos ese costo repetido
-    en cada petición HTTP.
-    """
     return Settings()

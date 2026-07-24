@@ -2,15 +2,16 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { ArrowUp, Check, Copy, Sparkles } from "lucide-react";
 import type { Message } from "../hooks/useConversations";
 import { Markdown } from "./Markdown";
+import { MessageSources } from "./MessageSources";
 
 interface ChatViewProps {
-  documentFilter: string | null;
+  scopeLabel: string | null;
   messages: Message[];
   isStreaming: boolean;
   onAsk: (query: string) => void;
 }
 
-export function ChatView({ documentFilter, messages, isStreaming, onAsk }: ChatViewProps) {
+export function ChatView({ scopeLabel, messages, isStreaming, onAsk }: ChatViewProps) {
   const [query, setQuery] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -55,8 +56,8 @@ export function ChatView({ documentFilter, messages, isStreaming, onAsk }: ChatV
                 Pregunta sobre tus papers
               </h2>
               <p className="max-w-sm text-[14px] text-ink-secondary dark:text-ink-secondary-dark">
-                {documentFilter
-                  ? `Buscando solo en "${documentFilter}".`
+                {scopeLabel
+                  ? `Buscando solo en ${scopeLabel}.`
                   : "Buscando en todos los documentos indexados."}
               </p>
             </div>
@@ -147,6 +148,10 @@ function AssistantMessage({ message }: { message: Message }) {
           {copied ? <Check size={13} /> : <Copy size={13} />}
           {copied ? "Copiado" : "Copiar"}
         </button>
+      )}
+
+      {message.status === "done" && message.citations && (
+        <MessageSources citations={message.citations} />
       )}
     </div>
   );
